@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>schema-lens</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand"><h1 id="brand-title">schema-lens</h1><div class="sub" id="brand-sub">DBML을 열어 관계 구조를 확인</div></div>
+  <div class="crumb" id="crumb" hidden>
+    <button class="iconbtn" id="back" disabled aria-label="뒤로" title="뒤로">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+    <span class="now" id="crumb-now">—</span>
+    <span class="deg" id="crumb-deg"></span>
+  </div>
+  <div class="grow"></div>
+  <div class="seg" role="group" aria-label="보기 모드">
+    <button id="m-erd" aria-pressed="true" title="전체 관계도">전체 ERD</button>
+    <button id="m-focus" aria-pressed="false" title="1-테이블 포커스 탐색">포커스</button>
+  </div>
+  <div class="seg" role="group" aria-label="관계 필터">
+    <button id="f-all" aria-pressed="true">전체</button>
+    <button id="f-real" aria-pressed="false" title="실제 DB FK 제약만">실 FK만</button>
+  </div>
+  <div class="seg" role="group" aria-label="컬럼 표시">
+    <button id="c-keys" aria-pressed="true" title="PK/FK/UNIQUE 컬럼만">키만</button>
+    <button id="c-all" aria-pressed="false">전체 컬럼</button>
+  </div>
+  <button class="iconbtn" id="fit" title="화면 맞춤 (0)" aria-label="화면 맞춤">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+  </button>
+  <button class="iconbtn" id="open" title="DBML 열기 (⌘O)" aria-label="파일 열기">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+  </button>
+  <button class="iconbtn" id="theme" title="테마 전환" aria-label="테마 전환">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.5M12 19.5V22M4.5 4.5l1.8 1.8M17.7 17.7l1.8 1.8M2 12h2.5M19.5 12H22M4.5 19.5l1.8-1.8M17.7 6.3l1.8-1.8"/></svg>
+  </button>
+</header>
+
+<div class="app">
+  <aside class="side" id="side">
+    <div class="search"><input id="q" type="search" placeholder="테이블 검색…" autocomplete="off" aria-label="검색"></div>
+    <div class="list" id="list"></div>
+  </aside>
+  <div class="stagewrap">
+    <div id="errbar" hidden><b>파싱 오류</b><span id="errbar-msg"></span></div>
+    <div id="erdwrap"><svg id="erd"></svg></div>
+    <div id="focuswrap">
+      <div class="stagetop">
+        <div class="guide" id="fguide"></div>
+        <div class="heads">
+          <div class="sh l"><span class="t">◀ 여기에 <b>딸린 것</b> <span class="n" id="cnt-l"></span></span><span class="s">이 레코드들이 가운데를 FK로 가리킴 (1:N 의 N쪽)</span></div>
+          <div class="sh m"><span class="t">FOCUS</span><span class="s">기준 테이블</span></div>
+          <div class="sh r"><span class="t"><span class="n" id="cnt-r"></span> 여기가 <b>가리키는 상위</b> ▶</span><span class="s">가운데가 이들을 FK로 참조 (1:N 의 1쪽)</span></div>
+        </div>
+      </div>
+      <div class="fstage" id="fstage">
+        <svg id="fwires" aria-hidden="true"></svg>
+        <div class="fcol l" id="fcolL"></div>
+        <div class="fcol m" id="fcolM"></div>
+        <div class="fcol r" id="fcolR"></div>
+      </div>
+    </div>
+    <div id="welcome">
+      <div class="big">DBML 파일을 여기로 드래그하세요</div>
+      <div class="small">또는 <kbd>⌘O</kbd> 로 열기 · 파일이 바뀌면 자동으로 다시 그립니다<br>
+        <code>// logical</code> 주석이 붙은 Ref는 점선(논리 FK)으로 표시됩니다</div>
+      <button class="open" id="welcome-open">DBML 열기</button>
+      <div class="err" id="welcome-err" hidden></div>
+    </div>
+  </div>
+</div>
+
+<div class="legend" id="legend" hidden>
+  <div class="lg"><svg viewBox="0 0 30 9"><path d="M1 4.5H23" stroke="var(--ink-2)" stroke-width="2"/><path d="M23 4.5l-5-3v6z" fill="var(--ink-2)"/></svg>실선=실 DB FK</div>
+  <div class="lg"><svg viewBox="0 0 30 9"><path d="M1 4.5H23" stroke="var(--ink-2)" stroke-width="2" stroke-dasharray="4 3"/><path d="M23 4.5l-5-3v6z" fill="var(--ink-2)"/></svg>점선=논리 FK</div>
+  <span style="color:var(--line)">│</span>
+  <span style="font-weight:650">관계 유형</span>
+  <div class="lg" id="tlegend" style="gap:4px;flex-wrap:wrap"></div>
+  <span style="color:var(--line)">│</span>
+  <div class="lg" id="hub-toggles" style="gap:8px"></div>
+  <span class="hint">카드의 <b>N:M</b>=조인테이블 · 선에 마우스=한 문장 설명 · 더블클릭=포커스</span>
+</div>
+
+<div id="tooltip"></div>
+<div id="drop-overlay">DBML 열기</div>
+
+<script src="../node_modules/elkjs/lib/elk.bundled.js"></script>
+<script src="../src/semantics.js"></script>
+<script src="erd.js"></script>
+<script src="focus.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

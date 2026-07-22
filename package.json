@@ -1,0 +1,23 @@
+{
+  "name": "schema-lens",
+  "version": "1.0.0",
+  "description": "DBML 스키마를 전체 ERD와 1-테이블 포커스 모드로 탐색하는 데스크톱 앱",
+  "main": "main.js",
+  "scripts": {
+    "test": "node scripts/check-model.js",
+    "start": "electron .",
+    "test:contrast": "node scripts/check-contrast.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "repository": "github:HwangBBang/schema-lens",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^43.1.1"
+  },
+  "dependencies": {
+    "@dbml/core": "^8.3.1-custom-metadata.3",
+    "elkjs": "^0.12.0"
+  }
+}

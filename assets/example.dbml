@@ -1,0 +1,397 @@
+// =============================================================================
+// schema-lens 예제 스키마 — 가상의 코드 협업 플랫폼 "ForgeHub"
+// =============================================================================
+// 이 파일은 뷰어 기능 시연과 npm test의 ground truth를 겸하는 허구의 스키마다.
+// 실존 서비스와 무관하며, 관계 유형 8종·허브 접기·조인테이블·논리 FK 등
+// schema-lens가 추론하는 모든 패턴을 담고 있다.
+//
+// 표기 규칙 (README의 DBML 컨벤션 참조)
+//   - Ref [delete: cascade] / [delete: set null] : 실제 DB FK 제약이 존재.
+//   - "// logical" 주석이 붙은 Ref : DB 제약 없이 애플리케이션이 보장하는 논리 FK.
+//   - status/state 류 enum 값은 DB CHECK 유무를 note 에 명시.
+//   - workspace_id 는 상위 테이블 대부분에 존재하는 멀티테넌시 판별자(→ workspaces.id, logical).
+//     엣지 폭주를 막기 위해 workspace_id Ref 는 파일 하단에 주석 블록으로 분리해 뒀다.
+// =============================================================================
+
+Project forgehub {
+  database_type: 'PostgreSQL'
+  Note: '가상의 코드 협업 플랫폼: 사용자/팀, 저장소, 이슈 트래킹, 코드 리뷰, 위키, 알림 도메인.'
+}
+
+// =============================================================================
+// 1. IDENTITY — 사용자/팀/인증
+// =============================================================================
+
+Table users {
+  id           uuid         [pk, default: `gen_random_uuid()`]
+  email        varchar(255) [not null, unique, note: 'uk_users_email']
+  name         varchar(100) [not null]
+  workspace_id uuid         [note: '소속 워크스페이스 → workspaces.id (logical)']
+  avatar_url   varchar(500)
+  status       varchar(20)  [not null, default: 'ACTIVE', note: 'CHECK: ACTIVE|SUSPENDED|DELETED']
+  created_at   timestamptz  [not null, default: `now()`]
+}
+
+Table teams {
+  id           uuid         [pk]
+  workspace_id uuid         [note: '소속 워크스페이스 → workspaces.id (logical)']
+  name         varchar(100) [not null]
+  parent_id    uuid         [note: '상위 팀 (중첩 팀 트리)']
+  created_at   timestamptz  [not null, default: `now()`]
+}
+Ref: teams.parent_id > teams.id [delete: set null]
+
+Table team_members {
+  team_id   uuid        [pk]
+  user_id   uuid        [pk]
+  role      varchar(20) [not null, default: 'MEMBER', note: 'CHECK: MAINTAINER|MEMBER']
+  joined_at timestamptz [not null, default: `now()`]
+}
+Ref: team_members.team_id > teams.id [delete: cascade]
+Ref: team_members.user_id > users.id [delete: cascade]
+
+Table api_tokens {
+  id           uuid         [pk]
+  account_id   uuid         [not null, note: '토큰 소유 계정 → users.id']
+  token_hash   varchar(255) [not null, unique]
+  scopes       varchar(255) [note: '쉼표 구분 스코프 목록 (앱 레벨 파싱)']
+  last_used_at timestamptz
+  expires_at   timestamptz
+}
+Ref: api_tokens.account_id > users.id [delete: cascade]
+
+Table user_settings {
+  user_id     uuid         [pk]
+  setting_key varchar(100) [pk, note: '예: theme, locale, digest_frequency']
+  value       text
+  updated_at  timestamptz  [not null, default: `now()`]
+}
+Ref: user_settings.user_id > users.id [delete: cascade]
+
+// =============================================================================
+// 2. WORKSPACE — 멀티테넌시 루트 (Ref는 하단 주석 블록 참조)
+// =============================================================================
+
+Table workspaces {
+  id         uuid         [pk]
+  name       varchar(100) [not null]
+  plan       varchar(20)  [not null, default: 'FREE', note: 'CHECK: FREE|TEAM|ENTERPRISE']
+  created_at timestamptz  [not null, default: `now()`]
+}
+
+// =============================================================================
+// 3. SOURCE — 저장소
+// =============================================================================
+
+Table repos {
+  id             uuid         [pk]
+  workspace_id   uuid         [note: '소속 워크스페이스 → workspaces.id (logical)']
+  owner_id       uuid         [not null, note: '소유자 → users.id']
+  name           varchar(100) [not null]
+  visibility     varchar(20)  [not null, default: 'PRIVATE', note: 'CHECK: PUBLIC|INTERNAL|PRIVATE']
+  default_branch varchar(100) [not null, default: 'main']
+  archived_at    timestamptz  [note: '보관 처리 시각 (NULL=활성)']
+}
+Ref: repos.owner_id > users.id
+
+Table repo_collaborators {
+  repo_id    uuid        [pk]
+  user_id    uuid        [pk]
+  permission varchar(20) [not null, default: 'READ', note: 'CHECK: READ|WRITE|ADMIN']
+}
+Ref: repo_collaborators.repo_id > repos.id [delete: cascade]
+Ref: repo_collaborators.user_id > users.id [delete: cascade]
+
+Table repo_stars {
+  repo_id    uuid        [pk]
+  user_id    uuid        [pk]
+  starred_at timestamptz [not null, default: `now()`]
+}
+Ref: repo_stars.repo_id > repos.id [delete: cascade]
+Ref: repo_stars.user_id > users.id [delete: cascade]
+
+Table repo_insights {
+  id             uuid        [pk]
+  repo_id        uuid        [not null, unique]
+  health_score   int         [note: '0~100. 배치 잡이 야간 재계산']
+  activity_level varchar(20) [note: 'CHECK 없음(앱 레벨): DORMANT|STEADY|ACTIVE|HOT']
+  computed_at    timestamptz
+}
+Ref: repo_insights.repo_id - repos.id // logical — 배치 산출물이라 FK 제약 없이 1:1 유지
+
+// =============================================================================
+// 4. PLANNING — 마일스톤/라벨/필터
+// =============================================================================
+
+Table milestones {
+  id        uuid         [pk]
+  repo_id   uuid         [not null]
+  title     varchar(200) [not null]
+  due_on    date
+  closed_at timestamptz
+}
+Ref: milestones.repo_id > repos.id [delete: cascade]
+
+Table labels {
+  id      uuid         [pk]
+  repo_id uuid         [not null]
+  name    varchar(100) [not null]
+  color   varchar(7)   [not null, default: '#888888']
+}
+Ref: labels.repo_id > repos.id [delete: cascade]
+
+Table saved_filters {
+  id         uuid         [pk]
+  user_id    uuid         [not null, note: '필터 소유자 → users.id']
+  name       varchar(100) [not null]
+  query      text         [not null, note: '이슈 검색 쿼리 문자열']
+  is_default boolean      [not null, default: false]
+}
+Ref: saved_filters.user_id > users.id
+
+// =============================================================================
+// 5. TRACKER — 이슈
+// =============================================================================
+
+Table issues {
+  id           uuid         [pk]
+  repo_id      uuid         [not null]
+  milestone_id uuid         [note: '마일스톤 → milestones.id (선택)']
+  author_id    uuid         [not null, note: '작성자 → users.id']
+  assignee_id  uuid         [note: '담당자 → users.id']
+  number       int          [not null, note: '저장소 내 이슈 번호. uq_issues_repo_number']
+  title        varchar(300) [not null]
+  state        varchar(20)  [not null, default: 'OPEN', note: 'CHECK: OPEN|CLOSED']
+  priority     varchar(20)  [note: 'CHECK 없음(앱 레벨): LOW|NORMAL|HIGH|URGENT']
+  closed_at    timestamptz
+  created_at   timestamptz  [not null, default: `now()`]
+}
+Ref: issues.repo_id > repos.id [delete: cascade]
+Ref: issues.milestone_id > milestones.id [delete: set null]
+Ref: issues.author_id > users.id
+Ref: issues.assignee_id > users.id [delete: set null]
+
+Table issue_labels {
+  issue_id uuid [pk]
+  label_id uuid [pk]
+}
+Ref: issue_labels.issue_id > issues.id [delete: cascade]
+Ref: issue_labels.label_id > labels.id [delete: cascade]
+
+Table issue_attachments {
+  id           uuid         [pk]
+  issue_id     uuid         [not null]
+  uploaded_by  uuid         [not null, note: '업로더 → users.id']
+  file_name    varchar(255) [not null]
+  content_type varchar(100)
+  size_bytes   bigint       [not null]
+  storage_key  varchar(500) [not null, note: '오브젝트 스토리지 키']
+}
+Ref: issue_attachments.issue_id > issues.id [delete: cascade]
+Ref: issue_attachments.uploaded_by > users.id
+
+Table issue_watchers {
+  issue_id   uuid        [pk]
+  user_id    uuid        [pk]
+  watched_at timestamptz [not null, default: `now()`]
+}
+Ref: issue_watchers.issue_id > issues.id [delete: cascade]
+Ref: issue_watchers.user_id > users.id [delete: cascade]
+
+// =============================================================================
+// 6. CONVERSATION — 댓글
+// =============================================================================
+
+Table comments {
+  id         uuid        [pk]
+  issue_id   uuid        [not null]
+  author_id  uuid        [not null, note: '작성자 → users.id']
+  parent_id  uuid        [note: '부모 댓글 (스레드 답글)']
+  body       text        [not null]
+  edited_at  timestamptz
+  created_at timestamptz [not null, default: `now()`]
+}
+Ref: comments.issue_id > issues.id [delete: cascade]
+Ref: comments.author_id > users.id
+Ref: comments.parent_id > comments.id [delete: cascade]
+
+Table comment_mentions {
+  comment_id        uuid [pk]
+  mentioned_user_id uuid [pk, note: '멘션 대상 → users.id (본문 파싱 산출물)']
+}
+Ref: comment_mentions.comment_id > comments.id [delete: cascade]
+Ref: comment_mentions.mentioned_user_id > users.id // logical — 본문 파싱으로 생성, FK 제약 없음
+
+Table comment_reactions {
+  comment_id uuid        [pk]
+  user_id    uuid        [pk]
+  emoji      varchar(20) [pk, note: '예: +1, heart, rocket']
+}
+Ref: comment_reactions.comment_id > comments.id [delete: cascade]
+Ref: comment_reactions.user_id > users.id [delete: cascade]
+
+Table comment_reads {
+  comment_id uuid        [pk]
+  user_id    uuid        [pk]
+  read_at    timestamptz [not null, default: `now()`]
+}
+Ref: comment_reads.comment_id > comments.id // logical — 읽음 처리는 앱이 보장(대량 쓰기 경로라 FK 생략)
+Ref: comment_reads.user_id > users.id // logical
+
+// =============================================================================
+// 7. REVIEW — 머지 리퀘스트
+// =============================================================================
+
+Table merge_requests {
+  id            uuid         [pk]
+  repo_id       uuid         [not null]
+  author_id     uuid         [not null, note: '작성자 → users.id']
+  source_branch varchar(200) [not null]
+  target_branch varchar(200) [not null]
+  state         varchar(20)  [not null, default: 'OPEN', note: 'CHECK: OPEN|MERGED|CLOSED']
+  merged_at     timestamptz
+  created_at    timestamptz  [not null, default: `now()`]
+}
+Ref: merge_requests.repo_id > repos.id [delete: cascade]
+Ref: merge_requests.author_id > users.id
+
+Table merge_request_commits {
+  merge_request_id uuid         [pk]
+  sha              varchar(40)  [pk]
+  message          varchar(500)
+  authored_at      timestamptz
+}
+Ref: merge_request_commits.merge_request_id > merge_requests.id [delete: cascade]
+
+Table review_requests {
+  merge_request_id uuid        [pk]
+  reviewer_id      uuid        [pk]
+  requested_by     uuid        [not null, note: '리뷰 요청자 → users.id']
+  status           varchar(20) [not null, default: 'PENDING', note: 'CHECK: PENDING|APPROVED|CHANGES_REQUESTED']
+}
+Ref: review_requests.merge_request_id > merge_requests.id [delete: cascade]
+Ref: review_requests.reviewer_id > users.id
+Ref: review_requests.requested_by > users.id
+
+// =============================================================================
+// 8. KNOWLEDGE — 위키
+// =============================================================================
+
+Table wiki_pages {
+  id      uuid         [pk]
+  repo_id uuid         [not null]
+  slug    varchar(200) [not null, note: 'uq_wiki_pages_repo_slug']
+  title   varchar(300) [not null]
+}
+Ref: wiki_pages.repo_id > repos.id [delete: cascade]
+
+Table wiki_revisions {
+  id           uuid        [pk]
+  wiki_page_id uuid        [not null]
+  created_by   uuid        [not null, note: '작성자 → users.id']
+  content      text        [not null]
+  created_at   timestamptz [not null, default: `now()`]
+}
+Ref: wiki_revisions.wiki_page_id > wiki_pages.id [delete: cascade]
+Ref: wiki_revisions.created_by > users.id
+
+Table wiki_page_links {
+  id               uuid        [pk]
+  wiki_page_id     uuid        [not null]
+  issue_id         uuid        [note: '연결 대상 이슈 (선택)']
+  merge_request_id uuid        [note: '연결 대상 MR (선택)']
+  link_type        varchar(20) [not null, default: 'RELATED', note: 'CHECK 없음(앱 레벨): RELATED|RESOLVES|DOCUMENTS']
+  created_at       timestamptz [not null, default: `now()`]
+}
+Ref: wiki_page_links.wiki_page_id > wiki_pages.id // logical — 본문 링크 파싱 산출물
+Ref: wiki_page_links.issue_id > issues.id // logical
+Ref: wiki_page_links.merge_request_id > merge_requests.id // logical
+
+// =============================================================================
+// 9. OPS — 감사 로그/알림
+// =============================================================================
+
+Table audit_events {
+  id           uuid         [pk]
+  workspace_id uuid         [note: '소속 워크스페이스 → workspaces.id (logical)']
+  actor_id     uuid         [note: '행위자 → users.id']
+  action       varchar(100) [not null, note: '예: repo.archive, issue.close']
+  entity_type  varchar(50)  [not null]
+  entity_id    uuid         [note: '다형 참조 — FK 없음']
+  created_at   timestamptz  [not null, default: `now()`]
+}
+Ref: audit_events.actor_id > users.id // logical — 감사 로그는 사용자 삭제 후에도 보존
+
+Table notifications {
+  id         uuid        [pk]
+  user_id    uuid        [not null, note: '수신자 → users.id']
+  kind       varchar(50) [not null, note: '예: issue.assigned, mr.review_requested']
+  payload    text        [note: 'JSON 직렬화 본문']
+  read_at    timestamptz
+  created_at timestamptz [not null, default: `now()`]
+}
+Ref: notifications.user_id > users.id
+
+// =============================================================================
+// TableGroup — ERD 클러스터
+// =============================================================================
+
+TableGroup Identity {
+  users
+  teams
+  team_members
+  api_tokens
+  user_settings
+}
+
+TableGroup Source {
+  repos
+  repo_collaborators
+  repo_stars
+  repo_insights
+}
+
+TableGroup Planning {
+  milestones
+  labels
+  saved_filters
+}
+
+TableGroup Tracker {
+  issues
+  issue_labels
+  issue_attachments
+  issue_watchers
+}
+
+TableGroup Conversation {
+  comments
+  comment_mentions
+  comment_reactions
+  comment_reads
+}
+
+TableGroup Review {
+  merge_requests
+  merge_request_commits
+  review_requests
+}
+
+TableGroup Knowledge {
+  wiki_pages
+  wiki_revisions
+  wiki_page_links
+}
+
+TableGroup Ops {
+  audit_events
+  notifications
+}
+
+// =============================================================================
+// workspace_id 논리 FK (엣지 폭주 방지를 위해 주석 처리 — 필요 시 해제)
+// =============================================================================
+// Ref: users.workspace_id > workspaces.id // logical
+// Ref: teams.workspace_id > workspaces.id // logical
+// Ref: repos.workspace_id > workspaces.id // logical
+// Ref: audit_events.workspace_id > workspaces.id // logical

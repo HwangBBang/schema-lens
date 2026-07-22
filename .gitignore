@@ -1,0 +1,13 @@
+node_modules/
+.DS_Store
+.gstack/
+
+# 스크린샷 CLI 산출물
+out*.png
+
+# 로컬 전용 — 실무 스키마와 그 파생물·회귀 (저장소에 올리지 않음)
+assets/schema.dbml
+assets/schema-reconstruction.json
+assets/reference-explorer.html
+scripts/check-local.js
+HANDOFF.md
