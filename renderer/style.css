@@ -140,7 +140,7 @@ svg.has-sel .edge.hot{opacity:1}
 svg.filter-real .edge.logical{display:none!important}
 
 /* ── minimap ── */
-#minimap{position:absolute;right:14px;bottom:14px;width:176px;height:120px;z-index:6;cursor:pointer;
+#minimap{position:absolute;right:14px;bottom:14px;z-index:6;cursor:pointer; /* 크기는 erd.js MM 상수가 지정 */
   background:color-mix(in srgb,var(--panel) 90%,transparent);border:1px solid var(--line);border-radius:10px;
   box-shadow:var(--shadow);touch-action:none}
 #minimap .mm-node{opacity:.5}

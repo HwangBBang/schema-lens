@@ -1,48 +1,109 @@
 # schema-lens
 
-DBML 파일을 열면 **엔티티 간 관계 구조를 한눈에** 보여주는 데스크톱 앱(Electron).
+A desktop ERD explorer for [DBML](https://dbml.dbdiagram.io/) schemas, built with Electron.
+
+schema-lens renders your whole schema as one readable diagram — relationships are
+classified by meaning, person-reference edges fold away instead of turning the graph
+into spaghetti, and a dedicated focus mode lets you walk the schema one table at a time.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/erd-dark.png">
+  <img alt="Full ERD view: clustered table groups, semantic edge colors, hub folding, minimap" src="docs/erd-light.png">
+</picture>
+
+## Why
+
+Auto-generated ERDs stop being useful at around 20 tables: every table references
+`users`, every edge crosses every other edge, and the actual structure drowns.
+schema-lens addresses this in three ways:
+
+- **Semantic edge classification** — every foreign key is typed as one of eight
+  relationship kinds (composition, ownership, request, authorship, sharing, mention,
+  hierarchy, reference), inferred from column-name patterns, `ON DELETE` rules, and
+  PK membership. Each type gets its own color and a one-sentence explanation on hover.
+- **Hub folding** — when most inbound edges of a high-degree table are
+  person-references (the `users` table in almost every schema), those edges are
+  hidden by default and summarized as compact chips on each card. What remains
+  visible is the structural skeleton. Folded hubs can be toggled back per hub.
+- **Obstacle-aware edge routing** — long edges that would cut straight through
+  other tables are routed around them, and a minimap keeps you oriented.
+
+## Features
+
+**Full ERD view**
+- Automatic layout clustered by `TableGroup` (elkjs layered algorithm)
+- Solid lines for enforced FK constraints, dashed for logical (application-level) FKs
+- Cardinality (`1:1` / `N:1` / `N:M`) shown on edge hover and in tooltips; junction tables detected and badged `N:M`
+- Click = 1-hop highlight · double-click = focus mode · `0` = fit to screen · `Esc` = deselect
+- Wheel = pan, `⌘`/`Ctrl` + wheel = zoom · drag tables, or drag a group hull to move the whole cluster
+- Layout edits persist per file (`View > Reset Layout` to discard)
+- Minimap with viewport indicator — click or drag it to jump
+
+**Focus mode**
+- Three-column view of a single table: referencing tables on the left (the N side),
+  the focused table in the middle, referenced parents on the right (the 1 side)
+- Click any neighbor to refocus; navigation history with back button
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/focus-dark.png">
+  <img alt="Focus mode: three-column navigation around a single table" src="docs/focus-light.png">
+</picture>
+
+**Editing workflow**
+- Open via `⌘`/`Ctrl`+`O`, drag & drop, or CLI argument; the last file is restored on launch
+- The open file is watched — edits re-parse and re-render automatically
+  (survives editors that replace the file on save)
+- Light and dark themes; the full palette is contrast-checked (WCAG AA) in both
+
+## Getting started
 
 ```bash
 npm install
-npm start                       # 마지막으로 열었던 파일 자동 복원
-npm start assets/example.dbml   # 예제 스키마(가상의 코드 협업 플랫폼)로 시작
-npm test                        # 파서/의미 레이어 검증 (assets/example.dbml ground truth + 회귀)
+npm start                       # restores the last opened file
+npm start assets/example.dbml   # bundled example: a fictional code-collaboration platform
 ```
 
-## 화면
+`npm test` runs the parser/semantics test suite against the bundled example schema
+plus inline regression fixtures. `npm run test:contrast` re-verifies palette contrast.
 
-- **전체 ERD** (기본): 전체 테이블을 TableGroup 클러스터로 자동 배치(elkjs).
-  - 휠 = 팬, ⌘/Ctrl+휠 = 줌, 빈 곳 드래그 = 팬, 테이블 드래그 = 위치 조정, **그룹(헐) 드래그 = 그룹 전체 이동** — 배치는 파일별로 저장, View > Reset Layout으로 초기화
-  - 클릭 = 1-hop 하이라이트, 더블클릭 = 포커스 모드, `0` = 화면 맞춤, `Esc` = 선택 해제
-  - 우하단 **미니맵**: 전체 배치와 현재 뷰포트를 표시, 클릭/드래그로 즉시 이동
-  - 다른 테이블을 가로지르는 **장거리 관계선은 자동으로 위/아래 우회**(장애물 인지 라우팅)
-- 테마: **라이트가 기본값**. 툴바 토글로 전환하면 선택이 저장된다. CLI `--theme light|dark`는 해당 세션만 강제(스크린샷 검증용).
-- **포커스 모드**: 테이블 1개 기준 3열 탐색 — 좌(피참조=딸린 하위) · 중(포커스) · 우(참조=가리키는 상위). 이웃 클릭으로 이동, 뒤로가기 히스토리.
+## DBML conventions (optional)
 
-## 관계 의미 표시
+Standard DBML works out of the box. A few conventions make the diagram more precise:
 
-- **실선 = 실제 DB FK / 점선 = 논리 FK** (아래 컨벤션 참조)
-- **관계 유형 8종 색상**: 소속 · 소유·담당 · 요청 · 작성·행위 · 공유·참여 · 멘션 · 계층 · 참조 — 컬럼명 패턴, cascade, PK 멤버십으로 자동 추론
-- **카디널리티**: unique FK 또는 `-` Ref → 1:1, 복합 PK가 전부 FK인 테이블 등 → N:M 배지(조인테이블), 그 외 N:1
-- **허브 접기**: 유입 엣지 대부분이 사람-참조(담당/작성/공유…)인 고차수 테이블(예: `users`)의 엣지는 기본 접힘 — 각 카드 하단 칩으로 축약 표시, 범례의 토글로 전체 표시. 구조(소속/계층) 엣지만 남아 스파게티가 사라진다.
-- 관계 선/FK 칩에 마우스를 올리면 **한 문장 설명** 툴팁.
+- **Logical FKs** — a trailing `// logical` comment on the line that declares a `Ref`
+  marks it as an application-enforced relationship with no database constraint; it
+  renders dashed. Works with inline refs (`[ref: > users.id] // logical`), composite
+  refs (`a.(x, y) > b.(x, y)`), table aliases, quoted identifiers, and `public.`
+  prefixes. Commented-out refs, block comments, and ref-shaped text inside `note`
+  strings are ignored.
+- **Edge labels** — a short leading phrase in a column note
+  (e.g. `note: 'assignee → users.id'`) is extracted as the relationship label shown
+  in tooltips and focus mode. Version/constraint meta tokens are stripped automatically.
+- **Clustering** — `TableGroup` drives ERD clusters, group colors, and the sidebar.
 
-## DBML 컨벤션 (선택)
+## Screenshot CLI
 
-표준 DBML만으로도 동작하지만, 다음 컨벤션이 있으면 더 정확해진다:
+Renders, captures, and exits without interaction — useful for visual regression checks:
 
-- `Ref: a.x > b.y  // logical` — Ref를 선언한 라인의 **트레일링 `//` 주석**에 단어 `logical`이 있으면 **논리 FK**(DB 제약 없음)로 점선 표시. 없으면 실 FK. 인라인 ref(`[ref: > b.y] // logical`), 복합 FK(`a.(x,y) > b.(x,y)`), 별칭·따옴표 이름도 지원. 주석 처리된 라인·note 문자열은 무시된다.
-- 컬럼 `note`의 앞부분 짧은 구절(예: `note: '담당자 → users.id (logical)'`)은 관계 의미 라벨로 추출된다. `V79.` / `UNIQUE(...)` 같은 메타 토큰은 자동으로 걷어냄.
-- `TableGroup`은 ERD 클러스터·색상·사이드바 그룹으로 사용된다.
+```bash
+npx electron . <file> --screenshot out.png [--focus TABLE] [--theme light|dark]
+```
 
-## 파일
+On parse failure it captures the error screen and exits with code 2. `--focus` and
+`--theme` apply to that run only; they don't touch saved preferences.
 
-- 열기: ⌘O, 창으로 드래그앤드롭, `npm start <파일>`
-- 열려 있는 파일이 바뀌면 자동으로 다시 파싱해 그린다(에디터로 DBML 수정하며 보기 좋음).
+## Architecture
 
-## 개발 메모
+| Path | Role |
+| --- | --- |
+| `src/parse.js` | `@dbml/core` parsing plus a raw-text prepass that collects `// logical` markers (the parser itself discards comments). Emits a plain JSON model. |
+| `src/semantics.js` | Dependency-free UMD module: relationship typing, cardinality, junction and hub heuristics. Shared by the Node test suite and the renderer. |
+| `renderer/erd.js` | elkjs layout, SVG rendering, viewport, obstacle-aware edge routing, minimap. |
+| `renderer/focus.js` | Three-column focus navigation. |
+| `renderer/app.js` | App state, shell, theming. |
+| `renderer/style.css` | Design tokens (single source of truth for both themes). |
 
-- `src/parse.js` — @dbml/core 파싱 + 원문 프리패스(`// logical` 수집; 파서가 주석을 버리기 때문). 순수 JSON 모델 산출.
-- `src/semantics.js` — 의존성 없는 UMD. 유형/카디널리티/조인/허브 휴리스틱. Node·브라우저 공용.
-- `renderer/erd.js` — elk 레이아웃 + SVG 렌더 + 뷰포트. `renderer/focus.js` — 3열 탐색. `renderer/app.js` — 상태/셸.
-- 스크린샷 검증: `npx electron . <파일> --screenshot out.png [--focus 테이블] [--theme light|dark]` — 렌더 완료 후 캡처하고 종료.
+## Notes
+
+- UI copy is currently in Korean.
+- 한국어 문서는 [README.ko.md](README.ko.md)에 있습니다.

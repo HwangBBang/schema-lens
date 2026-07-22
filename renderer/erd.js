@@ -156,7 +156,6 @@ const ERD = (() => {
       nodeLayer.appendChild(nodeEl(t));
     }
     // 엣지 (노드 위 배치 순서상 엣지가 아래)
-    apexRange = { min: Infinity, max: -Infinity };
     const hubSet = new Set(sem.hubs.map((h) => h.table));
     for (const r of model.refs) {
       const meta = sem.refMeta[r.id];
@@ -170,8 +169,7 @@ const ERD = (() => {
       hookEdge(g, r, meta);
       edgeEls.push({ el: g, ref: r, meta });
     }
-    applyHubToggles();
-    buildMinimap();
+    applyHubToggles(); // 아치 범위 집계·미니맵 재구축 포함
     applyTf();
   }
 
@@ -262,41 +260,84 @@ const ERD = (() => {
     return clip(-dx, x1 - rx) && clip(dx, rx + rw - x1) &&
            clip(-dy, y1 - ry) && clip(dy, ry + rh - y1) && t0 <= t1;
   }
-  // 직선 통로를 다른 노드가 막으면 위/아래로 우회할 apex y를, 아니면 null을 반환
-  function detourApex(r, cx, cy, px, py) {
-    if (Math.abs(px - cx) < 240) return null;
-    const M = 14, CLR = 26;
-    const blockersOf = (segs) => {
-      let top = Infinity, bot = -Infinity, hit = false;
-      for (const k in pos) {
-        if (k === r.child.table || k === r.parent.table) continue;
-        const b = pos[k];
-        if (segs.some((s) => segHitsRect(s[0], s[1], s[2], s[3], b.x - M, b.y - M, b.w + 2 * M, b.h + 2 * M))) {
-          hit = true; top = Math.min(top, b.y); bot = Math.max(bot, b.y + b.h);
+  // 엣지 곡선 정의: apex가 null이면 기본 단일 큐빅, 있으면 apex 경유 2-큐빅 아치
+  function curveSegs(cx, cy, px, py, parentRight, apex) {
+    if (apex === null) {
+      const dx = Math.max(46, Math.abs(px - cx) * 0.42);
+      const c1 = parentRight ? cx + dx : cx - dx;
+      const c2 = parentRight ? px - dx : px + dx;
+      return [[cx, cy, c1, cy, c2, py, px, py]];
+    }
+    const mx = (cx + px) / 2;
+    const out = Math.min(80, Math.abs(px - cx) * 0.22);
+    const o = parentRight ? out : -out;
+    const bend = (parentRight ? 1 : -1) * Math.abs(px - cx) / 6;
+    return [
+      [cx, cy, cx + o, cy, mx - bend, apex, mx, apex],
+      [mx, apex, mx + bend, apex, px - o, py, px, py],
+    ];
+  }
+  function segsToPath(segs) {
+    let d = `M${segs[0][0]},${segs[0][1]}`;
+    for (const s of segs) d += ` C${s[2]},${s[3]} ${s[4]},${s[5]} ${s[6]},${s[7]}`;
+    return d;
+  }
+  // 실제 그려질 곡선을 폴리라인으로 샘플링 — 직선(chord) 검사는 베지어 부풀음을 놓친다
+  function sampleSegs(segs, n) {
+    const pts = [];
+    for (const s of segs) {
+      for (let i = 0; i <= n; i++) {
+        const t = i / n, u = 1 - t;
+        pts.push([
+          u * u * u * s[0] + 3 * u * u * t * s[2] + 3 * u * t * t * s[4] + t * t * t * s[6],
+          u * u * u * s[1] + 3 * u * u * t * s[3] + 3 * u * t * t * s[5] + t * t * t * s[7],
+        ]);
+      }
+    }
+    return pts;
+  }
+  function curveBlockers(segs, skipA, skipB) {
+    const M = 14;
+    const pts = sampleSegs(segs, 10);
+    let top = Infinity, bot = -Infinity, hit = false;
+    for (const k in pos) {
+      if (k === skipA || k === skipB) continue;
+      const b = pos[k];
+      const rx = b.x - M, ry = b.y - M, rw = b.w + 2 * M, rh = b.h + 2 * M;
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (segHitsRect(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], rx, ry, rw, rh)) {
+          hit = true; top = Math.min(top, b.y); bot = Math.max(bot, b.y + b.h); break;
         }
       }
-      return hit ? { top, bot } : null;
-    };
-    const direct = blockersOf([[cx, cy, px, py]]);
-    if (!direct) return null;
-    const mid = (cy + py) / 2, mx = (cx + px) / 2;
+    }
+    return hit ? { top, bot } : null;
+  }
+  // 기본 곡선이 다른 노드에 막히면 위/아래 apex 우회를 계산. {segs, apex} 반환.
+  function routeEdge(r, cx, cy, px, py, parentRight) {
+    let segs = curveSegs(cx, cy, px, py, parentRight, null);
+    if (Math.abs(px - cx) < 240) return { segs, apex: null };
+    const direct = curveBlockers(segs, r.child.table, r.parent.table);
+    if (!direct) return { segs, apex: null };
+    const CLR = 26;
+    const mid = (cy + py) / 2;
     const up = mid - (direct.top - CLR) <= (direct.bot + CLR) - mid;
     let apex = up ? direct.top - CLR : direct.bot + CLR;
-    // 우회 경로(두 구간)가 또 다른 노드에 걸리면 같은 방향으로 최대 2회 더 벌림
-    for (let i = 0; i < 2; i++) {
-      const again = blockersOf([[cx, cy, mx, apex], [mx, apex, px, py]]);
-      if (!again) break;
-      apex = up ? Math.min(apex, again.top - CLR) : Math.max(apex, again.bot + CLR);
-    }
     // 같은 통로의 우회선끼리 겹치지 않게 ref별 소폭 스태거
     let h = 0; for (const ch of r.id) h = (h * 31 + ch.charCodeAt(0)) & 1023;
     apex += up ? -(h % 7) * 4 : (h % 7) * 4;
-    if (apexRange) { apexRange.min = Math.min(apexRange.min, apex); apexRange.max = Math.max(apexRange.max, apex); }
-    return apex;
+    // 우회 곡선 자체가 또 막히면 같은 방향으로 반드시 전진하며 최대 4회 재시도
+    for (let i = 0; i < 4; i++) {
+      segs = curveSegs(cx, cy, px, py, parentRight, apex);
+      const again = curveBlockers(segs, r.child.table, r.parent.table);
+      if (!again) return { segs, apex };
+      apex = up ? Math.min(apex - 34, again.top - CLR) : Math.max(apex + 34, again.bot + CLR);
+    }
+    return { segs: curveSegs(cx, cy, px, py, parentRight, apex), apex };
   }
 
   function drawEdge(g, r, meta) {
     g.innerHTML = '';
+    g._apexY = null;
     const c = pos[r.child.table], p = pos[r.parent.table];
     if (!c || !p) return;
     let d, ax, ay, tipDir, labX, labY;
@@ -311,20 +352,9 @@ const ERD = (() => {
       const parentRight = p.x + p.w / 2 >= c.x + c.w / 2;
       const cx = parentRight ? c.x + c.w : c.x;
       const px = parentRight ? p.x : p.x + p.w;
-      const apex = detourApex(r, cx, cy, px, py);
-      if (apex === null) {
-        const dx = Math.max(46, Math.abs(px - cx) * 0.42);
-        const c1 = parentRight ? cx + dx : cx - dx;
-        const c2 = parentRight ? px - dx : px + dx;
-        d = `M${cx},${cy} C${c1},${cy} ${c2},${py} ${px},${py}`;
-      } else {
-        // 우회 아치: 자식에서 수평 이탈 → apex 경유 → 부모로 수평 진입
-        const mx = (cx + px) / 2;
-        const out = Math.min(80, Math.abs(px - cx) * 0.22);
-        const bend = (parentRight ? 1 : -1) * Math.abs(px - cx) / 6;
-        d = `M${cx},${cy} C${cx + (parentRight ? out : -out)},${cy} ${mx - bend},${apex} ${mx},${apex}` +
-            ` C${mx + bend},${apex} ${px - (parentRight ? out : -out)},${py} ${px},${py}`;
-      }
+      const route = routeEdge(r, cx, cy, px, py, parentRight);
+      d = segsToPath(route.segs);
+      g._apexY = route.apex;
       ax = px; ay = py; tipDir = parentRight ? 1 : -1;
       labX = px - tipDir * 20; labY = py - 7;
       dotX = cx; dotY = cy;
@@ -351,6 +381,13 @@ const ERD = (() => {
         hookEdge(e.el, e.ref, e.meta);
       }
     }
+  }
+  // 드래그 확정 후: 라우팅은 모든 노드 위치에 의존하므로 비인접 엣지까지 전부 재계산
+  function settleAfterMove() {
+    redrawEdgesTouching(null);
+    recomputeApexRange();
+    buildMinimap();
+    if (S.selected) select(S.selected);
   }
   function hookEdge(g, r, meta) {
     const hit = g.querySelector('.hit');
@@ -402,6 +439,20 @@ const ERD = (() => {
       const hub = e.el.dataset.hub;
       if (hub) e.el.classList.toggle('hub-on', !!S.hubShown[hub]);
     }
+    recomputeApexRange();
+    buildMinimap();
+  }
+  // 화면에 보이는 엣지의 아치 y극값만 집계 — fit/미니맵이 잘림 없이 포함하도록
+  function recomputeApexRange() {
+    apexRange = { min: Infinity, max: -Infinity };
+    for (const e of edgeEls) {
+      const a = e.el._apexY;
+      if (a == null) continue;
+      const hub = e.el.dataset.hub;
+      if (hub && !S.hubShown[hub]) continue; // 접힌 허브 엣지는 보이지 않음
+      apexRange.min = Math.min(apexRange.min, a);
+      apexRange.max = Math.max(apexRange.max, a);
+    }
   }
   function applyFilter() { svg.classList.toggle('filter-real', S.filter === 'real'); if (S.selected) select(S.selected); }
 
@@ -417,27 +468,34 @@ const ERD = (() => {
   function mountMinimap() {
     mmSvg = document.getElementById('minimap');
     if (!mmSvg) return;
+    // 크기의 단일 출처는 MM 상수 — CSS에는 위치/외양만 둔다
     mmSvg.setAttribute('viewBox', `0 0 ${MM.w} ${MM.h}`);
+    mmSvg.style.width = MM.w + 'px';
+    mmSvg.style.height = MM.h + 'px';
+    mmSvg.style.boxSizing = 'content-box';
     const jump = (e) => {
       const mr = mmSvg.getBoundingClientRect(), r = svg.getBoundingClientRect();
-      const wx = (e.clientX - mr.left - MM.pad) / mmScale + mmBox.x;
-      const wy = (e.clientY - mr.top - MM.pad) / mmScale + mmBox.y;
+      const wx = (e.clientX - mr.left - mmSvg.clientLeft - MM.pad) / mmScale + mmBox.x;
+      const wy = (e.clientY - mr.top - mmSvg.clientTop - MM.pad) / mmScale + mmBox.y;
       tf.x = r.width / 2 - wx * tf.k;
       tf.y = r.height / 2 - wy * tf.k;
       applyTf();
     };
     let dragging = false;
     mmSvg.addEventListener('pointerdown', (e) => {
-      if (!mmBox) return;
+      if (e.button !== 0 || !mmBox) return;
       dragging = true; mmSvg.setPointerCapture(e.pointerId); jump(e);
     });
     mmSvg.addEventListener('pointermove', (e) => { if (dragging) jump(e); });
     mmSvg.addEventListener('pointerup', () => { dragging = false; });
+    mmSvg.addEventListener('pointercancel', () => { dragging = false; });
+    mmSvg.addEventListener('lostpointercapture', () => { dragging = false; });
     window.addEventListener('resize', updateMinimapView);
   }
   function buildMinimap() {
     if (!mmSvg || !model) return;
     mmBox = contentBBox();
+    if (!(mmBox.w > 0) || !(mmBox.h > 0)) { mmSvg.innerHTML = ''; mmView = null; mmBox = null; return; }
     mmScale = Math.min((MM.w - MM.pad * 2) / mmBox.w, (MM.h - MM.pad * 2) / mmBox.h);
     mmSvg.innerHTML = '';
     for (const t of model.tables) {
@@ -483,7 +541,7 @@ const ERD = (() => {
     tf = { k, x: (r.width - b.w * k) / 2 - b.x * k, y: (r.height - b.h * k) / 2 - b.y * k };
     applyTf();
   }
-  function fitIfPending() { if (pendingFit) fit(); }
+  function fitIfPending() { if (pendingFit) fit(); else updateMinimapView(); } // 숨김 중 리사이즈로 스테일해진 미니맵 뷰포트 보정
   function centerOn(name) {
     const p = pos[name]; if (!p) return;
     const r = svg.getBoundingClientRect();
@@ -556,10 +614,10 @@ const ERD = (() => {
       if (!drag) return;
       if (drag.type === 'node') {
         if (!drag.moved) { cb.onSelect(drag.name === S.selected ? null : drag.name); }
-        else { customLayout = true; savePositions(); if (S.selected) select(S.selected); }
+        else { customLayout = true; savePositions(); settleAfterMove(); }
       } else if (drag.type === 'group') {
         if (!drag.moved) cb.onSelect(null);
-        else { customLayout = true; savePositions(); if (S.selected) select(S.selected); }
+        else { customLayout = true; savePositions(); settleAfterMove(); }
       } else if (drag.type === 'pan' && !drag.moved) cb.onSelect(null);
       svg.classList.remove('panning');
       drag = null;
