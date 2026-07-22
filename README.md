@@ -107,3 +107,4 @@ On parse failure it captures the error screen and exits with code 2. `--focus` a
 ## Notes
 
 - UI copy is currently in Korean.
+- Licensed under the [MIT License](LICENSE).
