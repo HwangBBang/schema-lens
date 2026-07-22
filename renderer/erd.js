@@ -273,61 +273,10 @@ const ERD = (() => {
   }
 
   // ── 엣지 지오메트리 ──────────────────────────────────────
-  // 선분-사각형 교차 (Liang–Barsky)
-  function segHitsRect(x1, y1, x2, y2, rx, ry, rw, rh) {
-    let t0 = 0, t1 = 1;
-    const dx = x2 - x1, dy = y2 - y1;
-    const clip = (p, q) => {
-      if (p === 0) return q >= 0;
-      const t = q / p;
-      if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
-      else { if (t < t0) return false; if (t < t1) t1 = t; }
-      return true;
-    };
-    return clip(-dx, x1 - rx) && clip(dx, rx + rw - x1) &&
-           clip(-dy, y1 - ry) && clip(dy, ry + rh - y1) && t0 <= t1;
-  }
-  // 기본 곡선: 단일 큐빅
-  function curveSegs(cx, cy, px, py, parentRight) {
-    const dx = Math.max(46, Math.abs(px - cx) * 0.42);
-    const c1 = parentRight ? cx + dx : cx - dx;
-    const c2 = parentRight ? px - dx : px + dx;
-    return [[cx, cy, c1, cy, c2, py, px, py]];
-  }
-  function segsToPath(segs) {
-    let d = `M${segs[0][0]},${segs[0][1]}`;
-    for (const s of segs) d += ` C${s[2]},${s[3]} ${s[4]},${s[5]} ${s[6]},${s[7]}`;
-    return d;
-  }
-  // 실제 그려질 곡선을 폴리라인으로 샘플링 — 직선(chord) 검사는 베지어 부풀음을 놓친다
-  function sampleSegs(segs, n) {
-    const pts = [];
-    for (const s of segs) {
-      for (let i = 0; i <= n; i++) {
-        const t = i / n, u = 1 - t;
-        pts.push([
-          u * u * u * s[0] + 3 * u * u * t * s[2] + 3 * u * t * t * s[4] + t * t * t * s[6],
-          u * u * u * s[1] + 3 * u * u * t * s[3] + 3 * u * t * t * s[5] + t * t * t * s[7],
-        ]);
-      }
-    }
-    return pts;
-  }
-  function curveBlockers(segs, skipA, skipB) {
-    const M = 10;
-    const pts = sampleSegs(segs, 10);
-    let top = Infinity, bot = -Infinity, hit = false;
-    for (const k in pos) {
-      if (k === skipA || k === skipB) continue;
-      const b = pos[k];
-      const rx = b.x - M, ry = b.y - M, rw = b.w + 2 * M, rh = b.h + 2 * M;
-      for (let i = 0; i < pts.length - 1; i++) {
-        if (segHitsRect(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], rx, ry, rw, rh)) {
-          hit = true; top = Math.min(top, b.y); bot = Math.max(bot, b.y + b.h); break;
-        }
-      }
-    }
-    return hit ? { top, bot } : null;
+  // 폴백/미리보기용 직각 엘보(수평→수직→수평, 라운드 코너)
+  function elbowWp(cx, cy, px, py) {
+    const mx = (cx + px) / 2;
+    return [[cx, cy], [mx, cy], [mx, py], [px, py]];
   }
   // ── 격자 A* 라우팅 ──
   // 기본 곡선이 카드에 막히면, 카드 사이 통로를 지나는 직각(라운드 코너) 경로를 찾는다.
@@ -469,13 +418,14 @@ const ERD = (() => {
     return d;
   }
 
-  // 막히지 않으면 부드러운 기본 곡선, 막히면 격자 우회 경로
+  // 모든 관계선은 격자 직각(라운드 코너) 스타일로 통일 — 곡선/직각 혼재는 읽기를 방해한다.
+  // 드래그 중(fastPreview)과 경로 탐색 실패 시에는 같은 스타일의 단순 엘보로 그린다.
   function routeEdge(r, cx, cy, px, py, parentRight) {
-    const direct = curveSegs(cx, cy, px, py, parentRight);
-    if (fastPreview || !curveBlockers(direct, r.child.table, r.parent.table))
-      return segsToPath(direct);
-    const wp = gridRoute(cx, cy, px, py, parentRight);
-    return wp ? roundedPath(wp) : segsToPath(direct);
+    if (!fastPreview) {
+      const wp = gridRoute(cx, cy, px, py, parentRight);
+      if (wp) return roundedPath(wp);
+    }
+    return roundedPath(elbowWp(cx, cy, px, py));
   }
 
   function drawEdge(g, r, meta) {

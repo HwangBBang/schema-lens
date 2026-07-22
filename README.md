@@ -25,8 +25,9 @@ schema-lens addresses this in three ways:
   person-references (the `users` table in almost every schema), those edges are
   hidden by default and summarized as compact chips on each card. What remains
   visible is the structural skeleton. Folded hubs can be toggled back per hub.
-- **Obstacle-aware edge routing** — long edges that would cut straight through
-  other tables are routed around them, and a minimap keeps you oriented.
+- **Obstacle-aware edge routing** — every edge is routed on a grid through the
+  corridors between tables (rounded orthogonal paths), never through them, and a
+  minimap keeps you oriented.
 
 ## Features
 
@@ -106,4 +107,3 @@ On parse failure it captures the error screen and exits with code 2. `--focus` a
 ## Notes
 
 - UI copy is currently in Korean.
-- 한국어 문서는 [README.ko.md](README.ko.md)에 있습니다.
