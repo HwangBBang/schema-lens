@@ -243,6 +243,15 @@
   $('c-keys').addEventListener('click', () => setCols('keys'));
   $('c-all').addEventListener('click', () => setCols('all'));
   $('fit').addEventListener('click', () => ERD.fit());
+  const applySide = (open) => {
+    document.body.classList.toggle('side-collapsed', !open);
+    $('side-toggle').setAttribute('aria-pressed', String(open));
+    localStorage.setItem('dbv-side', open ? 'open' : 'closed');
+    ERD.fitIfPending(); // 캔버스 폭 변화에 맞춰 미니맵 뷰포트 갱신
+  };
+  $('side-toggle').addEventListener('click', () =>
+    applySide(document.body.classList.contains('side-collapsed')));
+  if (localStorage.getItem('dbv-side') === 'closed') applySide(false);
   $('open').addEventListener('click', () => window.dbv.openFileDialog());
   $('welcome-open').addEventListener('click', () => window.dbv.openFileDialog());
   $('back').addEventListener('click', () => {
