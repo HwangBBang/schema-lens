@@ -30,6 +30,7 @@
 
   // ── 모드 전환 ──
   function setMode(mode) {
+    const prev = S.mode;
     S.mode = mode;
     $('erdwrap').style.display = mode === 'erd' ? 'block' : 'none';
     $('focuswrap').style.display = mode === 'focus' ? 'block' : 'none';
@@ -43,6 +44,12 @@
       syncCrumb();
     } else {
       ERD.fitIfPending(); // 포커스 모드 중 미뤄둔 fit 실행
+      // 포커스에서 복귀하면 보던 테이블을 ERD에서도 선택·센터링 — 왕복 컨텍스트 유지
+      if (prev === 'focus' && tableExists(S.focusTable)) {
+        S.selected = S.focusTable;
+        ERD.select(S.selected);
+        ERD.centerOn(S.selected);
+      }
     }
     syncSidebarActive();
   }
@@ -72,6 +79,10 @@
   }
   // 크럼 수치는 포커스 카드 하단과 같은 기준(고유 테이블 수, 필터 반영)
   function syncCrumb() {
+    // 탐색 경로: 히스토리 꼬리 3개를 클릭 가능한 브레드크럼으로
+    const tail = S.hist.slice(-3);
+    $('crumb-path').innerHTML = (S.hist.length > 3 ? '<span>…</span>' : '') +
+      tail.map((h, i) => `<a data-idx="${S.hist.length - tail.length + i}">${esc(h)}</a><span>›</span>`).join('');
     $('crumb-now').textContent = S.focusTable || '—';
     const cs = new Set(), ps = new Set();
     for (const r of S.model.refs) {
@@ -206,7 +217,7 @@
       (model.meta.projectName ? ` · ${model.meta.projectName}` : '');
 
     buildSidebar(); buildLegend();
-    Focus.init(model, S.sem, S, { go });
+    Focus.init(model, S.sem, S, { go, tooltip });
     await ERD.load(model, S.sem, S);
     setMode(S.mode); // focus 모드면 여기서 렌더까지 수행
     if (!firstRenderDone) {
@@ -224,7 +235,11 @@
 
   // ── 툴바 ──
   $('m-erd').addEventListener('click', () => setMode('erd'));
-  $('m-focus').addEventListener('click', () => setMode('focus'));
+  $('m-focus').addEventListener('click', () => {
+    // ERD에서 선택해 둔 테이블이 있으면 그 테이블로 포커스 진입
+    if (S.mode === 'erd' && tableExists(S.selected)) go(S.selected);
+    else setMode('focus');
+  });
   const setFilter = (f) => {
     S.filter = f;
     $('f-all').setAttribute('aria-pressed', f === 'all');
@@ -259,6 +274,16 @@
     const prev = S.hist.pop();
     go(prev, true);
     $('back').disabled = !S.hist.length;
+  });
+  $('crumb-path').addEventListener('click', (e) => {
+    const a = e.target.closest('a');
+    if (!a) return;
+    const idx = +a.dataset.idx;
+    const name = S.hist[idx];
+    if (!name) return;
+    S.hist = S.hist.slice(0, idx); // 클릭 지점 이후 경로는 버린다
+    $('back').disabled = !S.hist.length;
+    go(name, true);
   });
   $('theme').addEventListener('click', () => {
     const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
