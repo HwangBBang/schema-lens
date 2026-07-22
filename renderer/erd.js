@@ -12,6 +12,7 @@ const ERD = (() => {
   let tf = { x: 40, y: 40, k: 1 };
   let customLayout = false;
   let pendingFit = false;
+  let apexRange = null;            // 우회 아치의 y 범위 — fit/미니맵이 잘림 없이 포함하도록
 
   const el = (tag, attrs, parent) => {
     const e = document.createElementNS(NS, tag);
@@ -119,7 +120,10 @@ const ERD = (() => {
   }
 
   // ── 렌더 ────────────────────────────────────────────────
-  function applyTf() { vp.setAttribute('transform', `translate(${tf.x},${tf.y}) scale(${tf.k})`); }
+  function applyTf() {
+    vp.setAttribute('transform', `translate(${tf.x},${tf.y}) scale(${tf.k})`);
+    updateMinimapView();
+  }
 
   function render() {
     if (cb && cb.tooltip) cb.tooltip.hide(); // 재렌더 시 툴팁 고착 방지
@@ -152,6 +156,7 @@ const ERD = (() => {
       nodeLayer.appendChild(nodeEl(t));
     }
     // 엣지 (노드 위 배치 순서상 엣지가 아래)
+    apexRange = { min: Infinity, max: -Infinity };
     const hubSet = new Set(sem.hubs.map((h) => h.table));
     for (const r of model.refs) {
       const meta = sem.refMeta[r.id];
@@ -166,6 +171,7 @@ const ERD = (() => {
       edgeEls.push({ el: g, ref: r, meta });
     }
     applyHubToggles();
+    buildMinimap();
     applyTf();
   }
 
@@ -242,6 +248,53 @@ const ERD = (() => {
   }
 
   // ── 엣지 지오메트리 ──────────────────────────────────────
+  // 선분-사각형 교차 (Liang–Barsky)
+  function segHitsRect(x1, y1, x2, y2, rx, ry, rw, rh) {
+    let t0 = 0, t1 = 1;
+    const dx = x2 - x1, dy = y2 - y1;
+    const clip = (p, q) => {
+      if (p === 0) return q >= 0;
+      const t = q / p;
+      if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+      else { if (t < t0) return false; if (t < t1) t1 = t; }
+      return true;
+    };
+    return clip(-dx, x1 - rx) && clip(dx, rx + rw - x1) &&
+           clip(-dy, y1 - ry) && clip(dy, ry + rh - y1) && t0 <= t1;
+  }
+  // 직선 통로를 다른 노드가 막으면 위/아래로 우회할 apex y를, 아니면 null을 반환
+  function detourApex(r, cx, cy, px, py) {
+    if (Math.abs(px - cx) < 240) return null;
+    const M = 14, CLR = 26;
+    const blockersOf = (segs) => {
+      let top = Infinity, bot = -Infinity, hit = false;
+      for (const k in pos) {
+        if (k === r.child.table || k === r.parent.table) continue;
+        const b = pos[k];
+        if (segs.some((s) => segHitsRect(s[0], s[1], s[2], s[3], b.x - M, b.y - M, b.w + 2 * M, b.h + 2 * M))) {
+          hit = true; top = Math.min(top, b.y); bot = Math.max(bot, b.y + b.h);
+        }
+      }
+      return hit ? { top, bot } : null;
+    };
+    const direct = blockersOf([[cx, cy, px, py]]);
+    if (!direct) return null;
+    const mid = (cy + py) / 2, mx = (cx + px) / 2;
+    const up = mid - (direct.top - CLR) <= (direct.bot + CLR) - mid;
+    let apex = up ? direct.top - CLR : direct.bot + CLR;
+    // 우회 경로(두 구간)가 또 다른 노드에 걸리면 같은 방향으로 최대 2회 더 벌림
+    for (let i = 0; i < 2; i++) {
+      const again = blockersOf([[cx, cy, mx, apex], [mx, apex, px, py]]);
+      if (!again) break;
+      apex = up ? Math.min(apex, again.top - CLR) : Math.max(apex, again.bot + CLR);
+    }
+    // 같은 통로의 우회선끼리 겹치지 않게 ref별 소폭 스태거
+    let h = 0; for (const ch of r.id) h = (h * 31 + ch.charCodeAt(0)) & 1023;
+    apex += up ? -(h % 7) * 4 : (h % 7) * 4;
+    if (apexRange) { apexRange.min = Math.min(apexRange.min, apex); apexRange.max = Math.max(apexRange.max, apex); }
+    return apex;
+  }
+
   function drawEdge(g, r, meta) {
     g.innerHTML = '';
     const c = pos[r.child.table], p = pos[r.parent.table];
@@ -258,10 +311,20 @@ const ERD = (() => {
       const parentRight = p.x + p.w / 2 >= c.x + c.w / 2;
       const cx = parentRight ? c.x + c.w : c.x;
       const px = parentRight ? p.x : p.x + p.w;
-      const dx = Math.max(46, Math.abs(px - cx) * 0.42);
-      const c1 = parentRight ? cx + dx : cx - dx;
-      const c2 = parentRight ? px - dx : px + dx;
-      d = `M${cx},${cy} C${c1},${cy} ${c2},${py} ${px},${py}`;
+      const apex = detourApex(r, cx, cy, px, py);
+      if (apex === null) {
+        const dx = Math.max(46, Math.abs(px - cx) * 0.42);
+        const c1 = parentRight ? cx + dx : cx - dx;
+        const c2 = parentRight ? px - dx : px + dx;
+        d = `M${cx},${cy} C${c1},${cy} ${c2},${py} ${px},${py}`;
+      } else {
+        // 우회 아치: 자식에서 수평 이탈 → apex 경유 → 부모로 수평 진입
+        const mx = (cx + px) / 2;
+        const out = Math.min(80, Math.abs(px - cx) * 0.22);
+        const bend = (parentRight ? 1 : -1) * Math.abs(px - cx) / 6;
+        d = `M${cx},${cy} C${cx + (parentRight ? out : -out)},${cy} ${mx - bend},${apex} ${mx},${apex}` +
+            ` C${mx + bend},${apex} ${px - (parentRight ? out : -out)},${py} ${px},${py}`;
+      }
       ax = px; ay = py; tipDir = parentRight ? 1 : -1;
       labX = px - tipDir * 20; labY = py - 7;
       dotX = cx; dotY = cy;
@@ -342,12 +405,72 @@ const ERD = (() => {
   }
   function applyFilter() { svg.classList.toggle('filter-real', S.filter === 'real'); if (S.selected) select(S.selected); }
 
+  // ── 미니맵 ──────────────────────────────────────────────
+  const MM = { w: 176, h: 120, pad: 6 };
+  let mmSvg = null, mmView = null, mmScale = 1, mmBox = null, mmRaf = 0;
+
+  function scheduleMinimap() {
+    if (mmRaf) return;
+    mmRaf = requestAnimationFrame(() => { mmRaf = 0; buildMinimap(); });
+  }
+
+  function mountMinimap() {
+    mmSvg = document.getElementById('minimap');
+    if (!mmSvg) return;
+    mmSvg.setAttribute('viewBox', `0 0 ${MM.w} ${MM.h}`);
+    const jump = (e) => {
+      const mr = mmSvg.getBoundingClientRect(), r = svg.getBoundingClientRect();
+      const wx = (e.clientX - mr.left - MM.pad) / mmScale + mmBox.x;
+      const wy = (e.clientY - mr.top - MM.pad) / mmScale + mmBox.y;
+      tf.x = r.width / 2 - wx * tf.k;
+      tf.y = r.height / 2 - wy * tf.k;
+      applyTf();
+    };
+    let dragging = false;
+    mmSvg.addEventListener('pointerdown', (e) => {
+      if (!mmBox) return;
+      dragging = true; mmSvg.setPointerCapture(e.pointerId); jump(e);
+    });
+    mmSvg.addEventListener('pointermove', (e) => { if (dragging) jump(e); });
+    mmSvg.addEventListener('pointerup', () => { dragging = false; });
+    window.addEventListener('resize', updateMinimapView);
+  }
+  function buildMinimap() {
+    if (!mmSvg || !model) return;
+    mmBox = contentBBox();
+    mmScale = Math.min((MM.w - MM.pad * 2) / mmBox.w, (MM.h - MM.pad * 2) / mmBox.h);
+    mmSvg.innerHTML = '';
+    for (const t of model.tables) {
+      const p = pos[t.name]; if (!p) continue;
+      el('rect', {
+        class: 'mm-node',
+        x: MM.pad + (p.x - mmBox.x) * mmScale, y: MM.pad + (p.y - mmBox.y) * mmScale,
+        width: Math.max(2, p.w * mmScale), height: Math.max(2, p.h * mmScale),
+        style: `fill:var(${S.groupColor[t.group] || '--gc-x'})`,
+      }, mmSvg);
+    }
+    mmView = el('rect', { class: 'mm-view', rx: 2 }, mmSvg);
+    updateMinimapView();
+  }
+  function updateMinimapView() {
+    if (!mmView || !mmBox) return;
+    const r = svg.getBoundingClientRect();
+    if (!r.width) return;
+    mmView.setAttribute('x', MM.pad + (-tf.x / tf.k - mmBox.x) * mmScale);
+    mmView.setAttribute('y', MM.pad + (-tf.y / tf.k - mmBox.y) * mmScale);
+    mmView.setAttribute('width', (r.width / tf.k) * mmScale);
+    mmView.setAttribute('height', (r.height / tf.k) * mmScale);
+  }
+
   // ── 뷰포트 ──────────────────────────────────────────────
   function contentBBox() {
     let x1 = 1e9, y1 = 1e9, x2 = -1e9, y2 = -1e9;
     for (const k in pos) {
       x1 = Math.min(x1, pos[k].x); y1 = Math.min(y1, pos[k].y);
       x2 = Math.max(x2, pos[k].x + pos[k].w); y2 = Math.max(y2, pos[k].y + pos[k].h);
+    }
+    if (apexRange && isFinite(apexRange.min)) {
+      y1 = Math.min(y1, apexRange.min - 8); y2 = Math.max(y2, apexRange.max + 8);
     }
     return { x: x1 - 30, y: y1 - 50, w: x2 - x1 + 60, h: y2 - y1 + 80 };
   }
@@ -419,12 +542,14 @@ const ERD = (() => {
         }
         for (const h of drag.hullEls) { h.n.setAttribute('x', h.x + dxk); h.n.setAttribute('y', h.y + dyk); }
         redrawEdgesTouchingSet(new Set(drag.members));
+        scheduleMinimap();
       }
       else {
         const p = pos[drag.name];
         p.x = drag.ox + dx / tf.k; p.y = drag.oy + dy / tf.k;
         nodeEls[drag.name].setAttribute('transform', `translate(${p.x},${p.y})`);
         redrawEdgesTouching(drag.name);
+        scheduleMinimap();
       }
     });
     svg.addEventListener('pointerup', (e) => {
@@ -447,7 +572,7 @@ const ERD = (() => {
 
   // ── 공개 API ────────────────────────────────────────────
   return {
-    mount(svgEl, callbacks) { svg = svgEl; cb = callbacks; hookViewport(); },
+    mount(svgEl, callbacks) { svg = svgEl; cb = callbacks; hookViewport(); mountMinimap(); },
     async load(m, s, state) {
       model = m; sem = s; S = state;
       await computeLayout();

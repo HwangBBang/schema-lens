@@ -139,6 +139,13 @@ svg.has-sel .edge.hot{opacity:1}
 .edge.hot circle,.edge.hot path.vis{opacity:1}
 svg.filter-real .edge.logical{display:none!important}
 
+/* ── minimap ── */
+#minimap{position:absolute;right:14px;bottom:14px;width:176px;height:120px;z-index:6;cursor:pointer;
+  background:color-mix(in srgb,var(--panel) 90%,transparent);border:1px solid var(--line);border-radius:10px;
+  box-shadow:var(--shadow);touch-action:none}
+#minimap .mm-node{opacity:.5}
+#minimap .mm-view{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.2}
+
 /* ── tooltip ── */
 #tooltip{position:fixed;z-index:99;max-width:340px;background:var(--panel);border:1px solid var(--line);
   border-radius:10px;box-shadow:var(--shadow);padding:8px 12px;font-size:11.5px;color:var(--ink-2);
