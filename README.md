@@ -20,7 +20,9 @@ schema-lens addresses this in three ways:
 - **Semantic edge classification** — every foreign key is typed as one of eight
   relationship kinds (composition, ownership, request, authorship, sharing, mention,
   hierarchy, reference), inferred from column-name patterns, `ON DELETE` rules, and
-  PK membership. Each type gets its own color and a one-sentence explanation on hover.
+  PK membership. Edges stay neutral gray until you hover or select — then the
+  relationship's color and a one-sentence explanation appear, so the diagram reads
+  calmly at rest but explains itself on demand.
 - **Hub folding** — when most inbound edges of a high-degree table are
   person-references (the `users` table in almost every schema), those edges are
   hidden by default and summarized as compact chips on each card. What remains
@@ -32,10 +34,15 @@ schema-lens addresses this in three ways:
 ## Features
 
 **Full ERD view**
-- Automatic layout clustered by `TableGroup` (elkjs layered algorithm)
+- Four arrangement modes on a floating bar at the bottom of the map: **group clusters**
+  (elkjs compound layout per `TableGroup`), **left→right flow**, **top→down flow**
+  (reference-direction layers), and **grid**. The chosen mode persists per file.
+- Table cards use solid group-color headers (dbdiagram-style); group hulls appear in
+  group mode, and every group is a collapsible section in the sidebar
 - Solid lines for enforced FK constraints, dashed for logical (application-level) FKs
 - Cardinality (`1:1` / `N:1` / `N:M`) shown on edge hover and in tooltips; junction tables detected and badged `N:M`
-- Click = 1-hop highlight · double-click = focus mode · `0` = fit to screen · `Esc` = deselect
+- Legend and per-hub edge toggles live in a popover behind the toolbar ⓘ button
+- Click = 1-hop highlight · double-click = focus mode · `0` = fit to screen · `Esc` = deselect · `/` = search
 - Wheel = pan, `⌘`/`Ctrl` + wheel = zoom · drag tables, or drag a group hull to move the whole cluster
 - Layout edits persist per file (`View > Reset Layout` to discard)
 - Minimap with viewport indicator — click or drag it to jump
@@ -43,7 +50,11 @@ schema-lens addresses this in three ways:
 **Focus mode**
 - Three-column view of a single table: referencing tables on the left (the N side),
   the focused table in the middle, referenced parents on the right (the 1 side)
-- Click any neighbor to refocus; navigation history with back button
+- One wire per relationship, anchored to the actual FK column row; hovering a wire,
+  column row, or neighbor card cross-highlights the other two
+- The keys-only / all-columns toggle applies here too
+- Click any neighbor to refocus; junction tables get a one-click shortcut to the far
+  side; navigation history with a breadcrumb in the toolbar
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/focus-dark.png">
@@ -54,7 +65,10 @@ schema-lens addresses this in three ways:
 - Open via `⌘`/`Ctrl`+`O`, drag & drop, or CLI argument; the last file is restored on launch
 - The open file is watched — edits re-parse and re-render automatically
   (survives editors that replace the file on save)
-- Light and dark themes; the full palette is contrast-checked (WCAG AA) in both
+- Light and dark themes; the full palette — including card headers and canvas
+  surfaces — is contrast-checked (WCAG AA) in both
+- On macOS the window is frameless: traffic lights sit on the sidebar and the top
+  strip drags the window
 
 ## Getting started
 
@@ -87,11 +101,13 @@ Standard DBML works out of the box. A few conventions make the diagram more prec
 Renders, captures, and exits without interaction — useful for visual regression checks:
 
 ```bash
-npx electron . <file> --screenshot out.png [--focus TABLE] [--theme light|dark]
+npx electron . <file> --screenshot out.png [--focus TABLE] [--theme light|dark] \
+  [--side open|closed] [--layout group|lr|tb|grid]
 ```
 
-On parse failure it captures the error screen and exits with code 2. `--focus` and
-`--theme` apply to that run only; they don't touch saved preferences.
+On parse failure it captures the error screen and exits with code 2. `--focus`,
+`--theme`, and `--side` apply to that run only; `--layout` behaves like clicking the
+arrangement bar, so the chosen mode is saved for that file.
 
 ## Architecture
 
