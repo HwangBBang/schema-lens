@@ -11,6 +11,30 @@ into spaghetti, and a dedicated focus mode lets you walk the schema one table at
   <img alt="Full ERD view: clustered table groups, semantic edge colors, hub folding, minimap" src="docs/erd-light.png">
 </picture>
 
+## Install
+
+**Download (macOS)** — grab the latest DMG from
+[Releases](https://github.com/HwangBBang/schema-lens/releases) (universal binary).
+
+The app is not code-signed, so the first launch triggers macOS Gatekeeper — either
+right-click the app and choose **Open**, or clear the quarantine flag:
+
+```bash
+xattr -cr /Applications/schema-lens.app
+```
+
+**Run from source (any platform)** — requires Node.js:
+
+```bash
+git clone https://github.com/HwangBBang/schema-lens.git
+cd schema-lens
+npm install
+npm start                       # restores the last opened file
+npm start assets/example.dbml   # or open the bundled example right away
+```
+
+More dev commands (tests, packaging) are under [Getting started](#getting-started).
+
 ## Why
 
 Auto-generated ERDs stop being useful at around 20 tables: every table references
@@ -80,6 +104,9 @@ npm start assets/example.dbml   # bundled example: a fictional code-collaboratio
 
 `npm test` runs the parser/semantics test suite against the bundled example schema
 plus inline regression fixtures. `npm run test:contrast` re-verifies palette contrast.
+
+`npm run dist` builds the macOS DMG/ZIP into `dist/` (electron-builder). Releases are
+published automatically by CI when a `v*` tag is pushed.
 
 ## DBML conventions (optional)
 

@@ -6,15 +6,55 @@
   "scripts": {
     "test": "node scripts/check-model.js",
     "start": "electron .",
-    "test:contrast": "node scripts/check-contrast.js"
+    "test:contrast": "node scripts/check-contrast.js",
+    "pack": "electron-builder --mac --dir",
+    "dist": "electron-builder --mac"
   },
   "keywords": [],
-  "author": "",
+  "author": "HwangBBang",
   "license": "MIT",
   "repository": "github:HwangBBang/schema-lens",
   "type": "commonjs",
+  "build": {
+    "appId": "io.github.hwangbbang.schema-lens",
+    "productName": "schema-lens",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**",
+      "src/**",
+      "assets/example.dbml"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "identity": null
+    },
+    "publish": {
+      "provider": "github"
+    }
+  },
   "devDependencies": {
-    "electron": "^43.1.1"
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "@dbml/core": "^8.3.1-custom-metadata.3",
