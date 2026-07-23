@@ -10,6 +10,7 @@
   --danger-surface:color-mix(in srgb,var(--danger) 12%,var(--panel));
   --danger-border:color-mix(in srgb,var(--danger) 40%,var(--line));
   --real:#1658ea; --logical:#5d6776;
+  --act-cascade:#b3261e; --act-setnull:#955716; --act-restrict:#5d6776;
   --pk:#885e11; --pk-bg:rgba(136,94,17,.14);
   --uq:#7a36ed; --uq-bg:rgba(124,58,237,.13);
   --tint-chip:16%; /* 자기색 칩 배경 틴트 — 대비 검증과 연동, 임의 변경 금지 */
@@ -32,6 +33,7 @@
   --accent:#6b93f7; --accent-ink:#89aaff; --accent-soft:rgba(107,147,247,.16); --on-accent:#0e1420;
   --danger:#ff8b7d;
   --real:#5f92ff; --logical:#8895a6;
+  --act-cascade:#ff8b7d; --act-setnull:#e0872b; --act-restrict:#8895a6;
   --pk:#e0b34a; --pk-bg:rgba(224,179,74,.10);
   --uq:#b596ff; --uq-bg:rgba(181,150,255,.10);
   --tint-chip:10%; /* 다크는 틴트가 배경을 밝혀 대비를 깎으므로 더 옅게 */
@@ -263,17 +265,57 @@ svg.filter-real .edge.logical{display:none!important}
 .fmore:hover{color:var(--ink);border-color:var(--muted-s)}
 .fcol{display:flex;flex-direction:column;gap:16px;z-index:3;min-width:0}
 .fcol.l{align-items:flex-end}.fcol.r{align-items:flex-start}.fcol.m{align-items:center}
+/* .fitem: 카드 + .fx 확장 패널 한 묶음 — .fcol gap(아이템 간)과 카드-패널 밀착을 분리 */
+.fitem{display:flex;flex-direction:column}
+.fcol.l .fitem{align-items:flex-end}
+.fcol.r .fitem{align-items:flex-start}
+.fitem:has(> .fx) > .fnode{border-bottom-left-radius:0;border-bottom-right-radius:0}
+.fx{width:255px;padding:6px 10px;background:var(--card-2);border:1px solid var(--line);border-top:0;
+  border-radius:0 0 12px 12px;display:flex;flex-direction:column;gap:1px}
+.fx .fxrow{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--ink-2);background:none;
+  border:0;font-family:inherit;text-align:left;padding:3px 4px;border-radius:6px;cursor:pointer}
+.fx .fxrow:hover,.fx .fxrow:focus-visible{background:var(--accent-soft)}
+.fx .fxrow i{font-style:normal;font-size:8px;color:var(--faint)}
+.fx .fxrow b{font-family:var(--mono);font-size:10.5px;font-weight:650;color:var(--ink)}
+.fx .fxmore{font-size:9.5px;color:var(--faint);padding:2px 4px}
+.fnode .fxbtn{align-self:flex-start;font-size:9.5px;font-weight:650;color:var(--muted-s);background:none;
+  border:1px solid var(--line);font-family:inherit;border-radius:20px;padding:2px 8px;cursor:pointer}
+.fnode .fxbtn:hover{color:var(--ink);border-color:var(--muted-s)}
+
+/* ── 영향권(삭제 영향) 모드 ── */
+#focuswrap.impact #fcolR{opacity:.45}           /* 삭제는 부모(참조 방향)로 전파되지 않음 */
+#focuswrap.impact #fwires g.fw.rw{opacity:.3}
+.f-typehead.soft{opacity:.78}
+.fx.fxchain .fxrow{padding-left:calc(4px + var(--lv,0)*12px)}
+.fx.fxchain .fxrow em{font-style:normal;font-size:9px;color:var(--faint)}
+.fx.fxchain .chainmore{font-size:9.5px;color:var(--faint);background:none;border:0;font-family:var(--mono);
+  text-align:left;cursor:pointer;padding:2px 4px calc(2px) calc(16px + var(--lv,0)*12px)}
+.fx.fxchain .chainmore:hover{color:var(--ink)}
+.chainwrap{display:contents}
+.f-impact{padding:7px 14px;font-size:10.5px;line-height:1.5;color:var(--ink-2);border-bottom:1px solid var(--line-2);
+  background:var(--card-2)}
+.f-impact .iv{color:var(--act-cascade)}
+.f-impact em{font-style:normal;color:var(--faint);font-size:9.5px}
+.f-impact .sep{margin:0 5px;color:var(--faint)}
+.f-foot .fimpact{margin-left:auto;font-size:10px;font-weight:650;font-family:inherit;border:1px solid var(--line);
+  border-radius:20px;padding:2px 9px;background:none;color:var(--muted-s);cursor:pointer}
+.f-foot .fimpact:hover{color:var(--ink);border-color:var(--muted-s)}
+.f-foot .fimpact[aria-pressed="true"]{background:var(--primary);color:var(--on-primary);border-color:var(--primary)}
 .fcol .empty{font-size:12px;color:var(--faint);font-family:var(--mono);padding:24px 0}
 
 .f-typehead{display:flex;align-items:center;gap:6px;margin:6px 0 -8px}
 .f-typehead .cnt{font-size:9.5px;color:var(--faint);font-family:var(--mono);font-weight:650}
 .fnode .fskip{align-self:flex-start;font-size:9.5px;font-weight:650;color:var(--accent-ink);
-  background:var(--accent-soft);border-radius:20px;padding:2px 8px;cursor:pointer}
+  background:var(--accent-soft);border:0;font-family:inherit;border-radius:20px;padding:2px 8px;cursor:pointer}
 .fnode .fskip:hover{background:color-mix(in srgb,var(--accent) 22%,transparent)}
 .fnode{position:relative;width:255px;max-width:255px;text-align:left;background:var(--card);border:1px solid var(--line);
   border-radius:12px;padding:8px 12px;cursor:pointer;box-shadow:var(--shadow);
   display:flex;flex-direction:column;gap:4px;transition:transform .13s ease,box-shadow .13s ease}
 .fnode:hover{transform:translateY(-1px);box-shadow:0 0 0 1.5px var(--accent),var(--shadow)}
+/* 키보드 커서(로빙 focus) — hover와 같은 시각 언어 */
+.fnode:focus-visible{box-shadow:0 0 0 1.5px var(--accent),var(--shadow)}
+.fnode .nrel span[tabindex]:focus-visible{outline-offset:1px;border-radius:4px}
+.col-row[tabindex]:focus-visible{outline-offset:-2px;background:var(--accent-soft)}
 .fnode .nname{font-family:var(--mono);font-size:11.5px;font-weight:650;color:var(--ink);overflow-wrap:anywhere}
 .fnode .nname::before{content:'';display:inline-block;width:7px;height:7px;border-radius:2px;
   background:var(--gc);margin-right:6px;vertical-align:1px}
@@ -288,6 +330,14 @@ svg.filter-real .edge.logical{display:none!important}
   background:color-mix(in srgb,var(--c) var(--tint-chip),transparent);white-space:nowrap}
 .cardchip{font-family:var(--mono);font-size:8.5px;font-weight:700;color:var(--muted-s);
   border:1px solid var(--line);border-radius:4px;padding:0 4px}
+/* onDelete 액션 칩 — 원문 문자열 표기. cascade만 틴트 채움, 나머지는 아웃라인 */
+.odc{--c2:var(--act-restrict);font-family:var(--mono);font-size:8.5px;font-weight:700;
+  padding:0 4px;border-radius:4px;white-space:nowrap;color:var(--c2);
+  border:1px solid color-mix(in srgb,var(--c2) 40%,transparent)}
+.odc.odc-cascade{--c2:var(--act-cascade);border-color:transparent;
+  background:color-mix(in srgb,var(--c2) var(--tint-chip),transparent)}
+.odc.odc-setnull{--c2:var(--act-setnull)}
+.odc.lg{opacity:.72} /* 논리 ref의 액션 표기는 저강조 — DB가 전파하지 않는 메타데이터 */
 
 .ffocus{background:var(--card);border:1px solid var(--line);border-radius:14px;
   box-shadow:0 0 0 1px var(--accent),0 14px 34px var(--focus-glow);width:100%;max-width:360px;

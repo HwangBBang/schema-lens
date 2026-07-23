@@ -25,6 +25,128 @@
 
   const META_COL = /^(id|created_at|updated_at|deleted_at|joined_at|sort_order|created_by|updated_by)$/;
 
+  // ---- 삭제 액션(referential action) ----
+  // DBML/SQL 표준 5종 + unknown. 판정·집계는 no action(명시)과 미지정을 동치 취급하고,
+  // specified 플래그로 표시 층위에서만 구분한다.
+  const ACTIONS = {
+    'cascade':     { label: '연쇄 삭제',   cssVar: '--act-cascade' },
+    'set null':    { label: 'NULL 전환',   cssVar: '--act-setnull' },
+    'set default': { label: '기본값 전환', cssVar: '--act-setnull' },
+    'restrict':    { label: '삭제 차단',   cssVar: '--act-restrict' },
+    'no action':   { label: '기본 동작',   cssVar: '--act-restrict' },
+    'unknown':     { label: '알 수 없음',  cssVar: '--act-restrict' },
+  };
+
+  // 원문 액션 문자열 → {action, specified, raw}. 대소문자·공백 변형 흡수, 전역(total) 분류.
+  function actionOf(raw) {
+    if (raw == null || String(raw).trim() === '') return { action: 'no action', specified: false, raw: null };
+    const norm = String(raw).trim().toLowerCase().replace(/[\s_]+/g, ' ');
+    return { action: norm in ACTIONS && norm !== 'unknown' ? norm : 'unknown', specified: true, raw: String(raw) };
+  }
+
+  // "root 테이블의 행을 삭제하면 무슨 일이 일어나는가" — 유입(피참조) 방향 전이 추적.
+  // - 실 FK: cascade만 재귀 전파. set null/set default는 행 생존 종단.
+  //   set null인데 FK 컬럼에 NOT NULL이 있으면 삭제 자체가 실패 → 거부권.
+  //   restrict·미지정·unknown은 루트 삭제 전체에 대한 거부권(vetoed).
+  // - 논리 ref: 앱 레벨 격리 분기(guaranteed:false) — DB가 강제하지 않으므로 거부권 절대 불포함.
+  //   [delete:] 표기가 있으면 앱 의도로 전파, 무표기는 고아 가능 종단.
+  // - 순환 차단은 전역 visited가 아니라 path-local stack: 종단으로 스친 테이블도
+  //   다른 cascade 경로로 실제 삭제 대상이 되면 재확장해야 하위 거부권을 놓치지 않는다
+  //   (다이아몬드 경로). 확장 중복 방지는 (table, db|app) 키로 분리.
+  // - 유입 인접은 표시용 inRefs(self 제외)와 달리 self-loop 포함(자체 구성).
+  function deleteImpact(model, root) {
+    const byName = new Map(model.tables.map((t) => [t.name, t]));
+    const incoming = new Map();
+    for (const r of model.refs) {
+      if (!incoming.has(r.parent.table)) incoming.set(r.parent.table, []);
+      incoming.get(r.parent.table).push(r);
+    }
+
+    const vetoed = [];
+    const cat = {
+      guaranteed: { cascade: new Set(), setNull: new Set(), setDefault: new Set(), blocked: new Set() },
+      app: { cascade: new Set(), setNull: new Set(), orphan: new Set() },
+    };
+    let maxDepth = 0;
+    const expanded = new Set();
+
+    function descend(entry, child, depth, guaranteed, stack) {
+      if (stack.has(child)) { entry.cycle = true; return; }
+      const key = child + '|' + (guaranteed ? 'db' : 'app');
+      if (expanded.has(key)) { entry.dedup = true; return; }
+      expanded.add(key);
+      stack.add(child);
+      entry.children = expand(child, depth + 1, guaranteed, stack);
+      stack.delete(child);
+    }
+
+    function expand(table, depth, guaranteed, stack) {
+      const entries = [];
+      for (const r of incoming.get(table) || []) {
+        const meta = actionOf(r.onDelete);
+        const child = r.child.table;
+        const entry = {
+          refId: r.id, table: child, via: r.child.cols.slice(),
+          action: meta.action, specified: meta.specified, raw: meta.raw,
+          kind: r.kind, guaranteed, depth, veto: false, warning: null,
+          cycle: false, orphan: false, children: [],
+        };
+        if (depth > maxDepth) maxDepth = depth;
+        const fkCols = (byName.get(child) || { cols: [] }).cols.filter((c) => r.child.cols.includes(c.name));
+
+        if (r.kind === 'logical') {
+          if (!meta.specified) { entry.orphan = true; cat.app.orphan.add(child); }
+          else if (meta.action === 'cascade') {
+            cat.app.cascade.add(child);
+            descend(entry, child, depth, false, stack);
+          } else if (meta.action === 'set null' || meta.action === 'set default') {
+            cat.app.setNull.add(child);
+          }
+          // restrict 등 그 외 표기는 표시만 — 전파·거부권 없음
+        } else if (meta.action === 'cascade') {
+          (guaranteed ? cat.guaranteed.cascade : cat.app.cascade).add(child);
+          descend(entry, child, depth, guaranteed, stack);
+        } else if (meta.action === 'set null') {
+          const notNull = fkCols.find((c) => c.notNull);
+          if (notNull) {
+            entry.veto = true;
+            entry.warning = `NOT NULL(${notNull.name}) — 삭제 실패`;
+            if (guaranteed) {
+              vetoed.push({ refId: r.id, table: child, via: entry.via, reason: 'not-null' });
+              cat.guaranteed.blocked.add(child);
+            }
+          } else (guaranteed ? cat.guaranteed.setNull : cat.app.setNull).add(child);
+        } else if (meta.action === 'set default') {
+          const missing = fkCols.find((c) => c.dflt == null);
+          if (missing) entry.warning = `기본값 없음(${missing.name}) — 삭제 실패 가능`;
+          (guaranteed ? cat.guaranteed.setDefault : cat.app.setNull).add(child);
+        } else { // restrict / no action(명시·미지정) / unknown
+          entry.veto = true;
+          if (guaranteed) {
+            vetoed.push({ refId: r.id, table: child, via: entry.via, reason: meta.specified ? meta.action : 'unspecified' });
+            cat.guaranteed.blocked.add(child);
+          }
+        }
+        entries.push(entry);
+      }
+      return entries;
+    }
+
+    const entries = expand(root, 1, true, new Set([root]));
+    const arr = (s) => Array.from(s);
+    return {
+      entries, vetoed,
+      summary: {
+        guaranteed: {
+          cascade: arr(cat.guaranteed.cascade), setNull: arr(cat.guaranteed.setNull),
+          setDefault: arr(cat.guaranteed.setDefault), blocked: arr(cat.guaranteed.blocked),
+        },
+        app: { cascade: arr(cat.app.cascade), setNull: arr(cat.app.setNull), orphan: arr(cat.app.orphan) },
+        maxDepth,
+      },
+    };
+  }
+
   function inferType(ref, ctx) {
     const col = (ref.child.cols[0] || '').toLowerCase();
     const childTable = ref.child.table.toLowerCase();
@@ -39,7 +161,7 @@
         (ctx.isJunction(ref.child.table) && /(^user_id$|^person_id$)/.test(col) && !ctx.junctionPrimary(ref.child.table, ref.parent.table)))
       return 'share';
     // 소속(구성요소) 신호: cascade 삭제 / FK가 PK 일부 / 자식 이름이 부모 이름을 접두로 가짐
-    if (ref.onDelete === 'cascade') return 'comp';
+    if (actionOf(ref.onDelete).action === 'cascade') return 'comp';
     if (ctx.colInPk(ref.child.table, ref.child.cols[0])) return 'comp';
     const norm = (s) => s.replace(/ies$/, 'y').replace(/s$/, '');
     const parentBase = norm(parentTable);
@@ -171,6 +293,8 @@
         card,
         label: labelFromNote(childCol && childCol.note) || DEFAULT_LABEL[type],
         sentence: sentence(type, r, card),
+        onDelete: actionOf(r.onDelete),
+        onUpdate: actionOf(r.onUpdate),
       };
     }
 
@@ -206,5 +330,5 @@
     return { TYPES, refMeta, tableMeta, junctions, hubs };
   }
 
-  return { analyze, TYPES };
+  return { analyze, TYPES, ACTIONS, actionOf, deleteImpact };
 });

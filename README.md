@@ -102,12 +102,25 @@ Renders, captures, and exits without interaction — useful for visual regressio
 
 ```bash
 npx electron . <file> --screenshot out.png [--focus TABLE] [--theme light|dark] \
-  [--side open|closed] [--layout group|lr|tb|grid]
+  [--side open|closed] [--layout group|lr|tb|grid] [--impact] [--peek TABLE]
 ```
 
 On parse failure it captures the error screen and exits with code 2. `--focus`,
 `--theme`, and `--side` apply to that run only; `--layout` behaves like clicking the
 arrangement bar, so the chosen mode is saved for that file.
+
+Focus-mode extras — both require an explicit `--focus TABLE` (the process exits with
+code 1 otherwise):
+
+- `--impact` opens the delete-impact view (action sections + cascade chains).
+- `--peek TABLE` expands the 2-hop preview panel of that neighbor card. If the target
+  is hidden behind a collapsed "+N more" fold it is auto-expanded; if it is not a
+  neighbor of the focused table at all, the run exits with code 2.
+
+```bash
+npx electron . assets/example.dbml --screenshot impact.png --focus repos --impact
+npx electron . assets/example.dbml --screenshot peek.png --focus issues --peek comments
+```
 
 ## Architecture
 
