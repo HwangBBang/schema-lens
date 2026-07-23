@@ -65,8 +65,12 @@ const Focus = (() => {
     div.className = 'ffocus'; div.style.setProperty('--gc', `var(${gv})`);
     const passesFilter = (r) => S.filter !== 'real' || r.kind === 'real';
     const selfRef = model.refs.find((r) => r.self && r.child.table === t.name && passesFilter(r));
+    // ERD와 같은 규칙으로 컬럼 필터 — 키만: PK/UNIQUE/FK 멤버
+    const fkColsAll = new Set(model.refs.filter((r) => r.child.table === t.name && passesFilter(r)).flatMap((r) => r.child.cols));
+    const colsShown = S.colsMode === 'all' ? t.cols : t.cols.filter((c) => c.pk || c.unique || fkColsAll.has(c.name));
+    const hiddenN = t.cols.length - colsShown.length;
     let rows = '';
-    for (const c of t.cols) {
+    for (const c of colsShown) {
       const nullable = !c.pk && !c.notNull;
       let b = '';
       if (c.pk) b += '<span class="badge pk">PK</span>';
@@ -92,14 +96,15 @@ const Focus = (() => {
       }
       rows += `<div class="col-row ${nullable ? 'nullable' : ''}" data-col="${esc(c.name)}"><span class="b">${b}</span><span class="cn">${esc(c.name)}</span>${cell}</div>`;
     }
+    if (hiddenN > 0) rows += `<div class="col-row cmore">… ${hiddenN}개 컬럼 더 (전체 컬럼으로 보기)</div>`;
     const nb = neighbors(t.name);
     const nc = Object.keys(nb.children).length, np = Object.keys(nb.parents).length;
     const j = sem.junctions[t.name];
     const jb = j !== undefined ? `<span class="f-nm">${j === null ? 'N:M multi 링크' : `N:M 연결 · ${esc(j[0])} ↔ ${esc(j[1])}`}</span>` : '';
     div.innerHTML =
-      `<div class="f-head"><div class="f-top"><span class="f-dot"></span><span class="f-name">${esc(t.name)}</span>` +
-      `${selfRef ? '<span class="f-self">⟲ self-ref</span>' : ''}${jb}</div>` +
-      `<div class="f-note">${esc(t.note || '')}</div></div>` +
+      `<div class="f-head"><div class="f-top"><span class="f-name">${esc(t.name)}</span>` +
+      `${selfRef ? '<span class="f-self">⟲ self-ref</span>' : ''}${jb}</div></div>` +
+      `${t.note ? `<div class="f-note">${esc(t.note)}</div>` : ''}` +
       `<div class="f-cols">${rows}</div>` +
       `<div class="f-foot"><span>피참조 <b>${nc}</b></span><span>참조 <b>${np}</b></span><span>컬럼 <b>${t.cols.length}</b></span></div>`;
     div.querySelectorAll('.fk[data-goto]').forEach((a) =>
@@ -163,22 +168,20 @@ const Focus = (() => {
       for (const k in attrs) e.setAttribute(k, attrs[k]);
       return e;
     };
-    // 관계(엣지) 하나 = 와이어 하나. 색·점선은 그 엣지의 유형·kind를 그대로 따른다.
+    // 관계(엣지) 하나 = 와이어 하나. 기본은 중립색, hover/hot 시 유형색으로 강조(dbdiagram 문법).
     const mk = (a, b2, ay, by, ref, info) => {
       const m = sem.refMeta[ref.id], cvar = sem.TYPES[m.type].cssVar;
       const g = mkNS('g', { class: 'fw' });
+      g.style.setProperty('--c', `var(${cvar})`);
       g.dataset.other = info.other; g.dataset.col = info.col || '';
       const dx = Math.max(50, Math.abs(b2 - a) * 0.5);
       const d = `M${a},${ay} C${a + dx},${ay} ${b2 - dx},${by} ${b2},${by}`;
-      const p = mkNS('path', { d, class: 'w', 'stroke-width': '2.4', 'stroke-linecap': 'round' });
-      p.style.stroke = `var(${cvar})`;
+      const p = mkNS('path', { d, class: 'w', 'stroke-width': '2', 'stroke-linecap': 'round' });
       if (ref.kind === 'logical') p.setAttribute('stroke-dasharray', '6 4');
       g.appendChild(p);
-      const arr = mkNS('path', { d: `M${b2},${by} l-8,-3.6 v7.2 Z` });
-      arr.style.fill = `var(${cvar})`;
+      const arr = mkNS('path', { d: `M${b2},${by} l-8,-3.6 v7.2 Z`, class: 'wa' });
       g.appendChild(arr);
-      const dot = mkNS('circle', { cx: a, cy: ay, r: '3.4' });
-      dot.style.fill = `var(${cvar})`;
+      const dot = mkNS('circle', { cx: a, cy: ay, r: '3.2', class: 'wd' });
       g.appendChild(dot);
       const hit = mkNS('path', { d, class: 'hit' });
       hit.addEventListener('pointerenter', (e) => {
@@ -221,7 +224,7 @@ const Focus = (() => {
       // 미존재 테이블 — 낡은 뷰를 남기지 않고 정리
       $('fwires').innerHTML = '';
       $('cnt-l').textContent = 0; $('cnt-r').textContent = 0;
-      $('fguide').innerHTML = `<b class="fn">「${esc(name || '')}」</b> — 존재하지 않는 테이블입니다`;
+      M.innerHTML = `<div class="empty">「${esc(name || '')}」 — 존재하지 않는 테이블</div>`;
       return;
     }
     S.focusTable = name;
@@ -282,18 +285,6 @@ const Focus = (() => {
     M.appendChild(focusCard(t));
     fillRight(R, nb.parents);
     $('cnt-l').textContent = ck.length; $('cnt-r').textContent = pk.length;
-
-    const short = (s) => (s.startsWith(name + '_') ? s.slice(name.length + 1) : s);
-    const exL = ck.slice(0, 4).map(short).join(' · ') + (ck.length > 4 ? ' …' : '');
-    const pmeans = [];
-    pk.forEach((o) => nb.parents[o].forEach((r) => {
-      const m = sem.refMeta[r.id].label;
-      if (m && !pmeans.includes(m)) pmeans.push(m);
-    }));
-    const exR = pmeans.slice(0, 4).join(' · ') + (pmeans.length > 4 ? ' …' : '');
-    $('fguide').innerHTML = (ck.length || pk.length)
-      ? `<b class="fn">「${esc(name)}」</b> 하나를 놓고 보면 — <span class="gtag l">◀ 딸린 하위 ${ck.length}</span> <span class="gex">${esc(exL) || '없음'}</span> &nbsp; <span class="gtag r">가리키는 상위 ${pk.length} ▶</span> <span class="gex">${esc(exR) || '없음'}</span>`
-      : `<b class="fn">「${esc(name)}」</b> — 연결된 관계가 없습니다`;
     requestAnimationFrame(() => requestAnimationFrame(() => {
       drawWires();
       // 포커스 카드 컬럼 스크롤 시 행 정박 와이어 재계산

@@ -59,6 +59,36 @@ const ERD = (() => {
   }
   function clearPositions() { localStorage.removeItem(posStoreKey()); customLayout = false; }
 
+  // 정렬 방식: group(그룹 묶음) | lr(가로 흐름) | tb(세로 흐름) | grid(격자) — 파일별 유지
+  const MODES = ['group', 'lr', 'tb', 'grid'];
+  let layoutMode = 'group';
+  function layStoreKey() { return `dbv-lay:${S.filePath || 'untitled'}`; }
+  function loadLayoutMode() {
+    const m = localStorage.getItem(layStoreKey());
+    layoutMode = MODES.includes(m) ? m : 'group';
+  }
+
+  // 격자: 그룹 순서 → 정의 순서로 균등 나열 (카드 폭이 동일해 열이 맞음)
+  function gridLayout() {
+    const order = [];
+    const grouped = new Set();
+    for (const g of model.groups) {
+      for (const t of model.tables) if (t.group === g.name) { order.push(t); grouped.add(t.name); }
+    }
+    for (const t of model.tables) if (!grouped.has(t.name)) order.push(t);
+    const cols = Math.max(1, Math.round(Math.sqrt(order.length * 1.7)));
+    const GX = 60, GY = 48;
+    pos = {};
+    let x = 0, y = 0, rowH = 0, c = 0;
+    for (const t of order) {
+      const s = nodeSize(t);
+      pos[t.name] = { x, y, w: s.w, h: s.h, rowY: {} };
+      rowH = Math.max(rowH, s.h);
+      if (++c >= cols) { c = 0; x = 0; y += rowH + GY; rowH = 0; }
+      else x += s.w + GX;
+    }
+  }
+
   async function computeLayout() {
     const saved = loadPositions();
     if (saved && model.tables.every((t) => saved[t.name])) {
@@ -70,27 +100,33 @@ const ERD = (() => {
       customLayout = true;
       return;
     }
+    if (layoutMode === 'grid') { gridLayout(); customLayout = false; return; }
     const hubSet = new Set(sem.hubs.map((h) => h.table));
-    const groups = model.groups.filter((g) => g.tables.some((tn) => model.tables.some((t) => t.name === tn)));
-    const grouped = new Set();
     const nodeOf = (t) => { const s = nodeSize(t); return { id: t.name, width: s.w, height: s.h }; };
     const children = [];
-    for (const g of groups) {
-      const members = model.tables.filter((t) => t.group === g.name);
-      if (!members.length) continue;
-      members.forEach((t) => grouped.add(t.name));
-      children.push({
-        id: 'g:' + g.name,
-        // 그룹 내부 간격은 이 컴파운드 노드의 옵션이 지배 — 루트 옵션만으로는 부족
-        layoutOptions: {
-          'elk.padding': '[top=52,left=30,bottom=30,right=30]',
-          'elk.spacing.nodeNode': '76',
-          'elk.layered.spacing.nodeNodeBetweenLayers': '128',
-        },
-        children: members.map(nodeOf),
-      });
+    if (layoutMode === 'group') {
+      const groups = model.groups.filter((g) => g.tables.some((tn) => model.tables.some((t) => t.name === tn)));
+      const grouped = new Set();
+      for (const g of groups) {
+        const members = model.tables.filter((t) => t.group === g.name);
+        if (!members.length) continue;
+        members.forEach((t) => grouped.add(t.name));
+        children.push({
+          id: 'g:' + g.name,
+          // 그룹 내부 간격은 이 컴파운드 노드의 옵션이 지배 — 루트 옵션만으로는 부족
+          layoutOptions: {
+            'elk.padding': '[top=52,left=30,bottom=30,right=30]',
+            'elk.spacing.nodeNode': '76',
+            'elk.layered.spacing.nodeNodeBetweenLayers': '128',
+          },
+          children: members.map(nodeOf),
+        });
+      }
+      for (const t of model.tables) if (!grouped.has(t.name)) children.push(nodeOf(t));
+    } else {
+      // lr/tb: 그룹 묶음 없이 참조 구조만으로 흐름 배치
+      for (const t of model.tables) children.push(nodeOf(t));
     }
-    for (const t of model.tables) if (!grouped.has(t.name)) children.push(nodeOf(t));
     // 레이아웃용 엣지: 구조 엣지만(허브 유입/셀프 제외) — 접힌 엣지가 배치를 흔들지 않게
     const edges = model.refs
       .filter((r) => !r.self && !hubSet.has(r.parent.table))
@@ -101,7 +137,7 @@ const ERD = (() => {
       id: 'root',
       layoutOptions: {
         'elk.algorithm': 'layered',
-        'elk.direction': 'RIGHT',
+        'elk.direction': layoutMode === 'tb' ? 'DOWN' : 'RIGHT',
         'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
         'elk.layered.spacing.nodeNodeBetweenLayers': '104',
         'elk.spacing.nodeNode': '56',
@@ -143,18 +179,20 @@ const ERD = (() => {
     const nodeLayer = el('g', {}, vp);
     edgeEls = []; nodeEls = {}; hullByGroup = {};
 
-    // 그룹 헐
-    for (const g of model.groups) {
-      const members = model.tables.filter((t) => t.group === g.name && pos[t.name]);
-      if (!members.length) continue;
-      const b = hullBox(members);
-      const gv = S.groupColor[g.name] || '--gc-x';
-      const hg = el('g', { class: 'hullg', style: `--gc:var(${gv})` }, hullLayer);
-      hg.dataset.group = g.name;
-      const rect = el('rect', { class: 'hull', x: b.x, y: b.y, width: b.w, height: b.h, rx: 14 }, hg);
-      const lab = el('text', { class: 'hull-label', x: b.x + 13, y: b.y + 19 }, hg);
-      lab.textContent = `${g.name}  · ${members.length}`;
-      hullByGroup[g.name] = { rect, lab };
+    // 그룹 헐 — 그룹 정렬에서만. 흐름/격자 정렬에선 멤버가 흩어져 헐이 오해를 만든다
+    if (layoutMode === 'group') {
+      for (const g of model.groups) {
+        const members = model.tables.filter((t) => t.group === g.name && pos[t.name]);
+        if (!members.length) continue;
+        const b = hullBox(members);
+        const gv = S.groupColor[g.name] || '--gc-x';
+        const hg = el('g', { class: 'hullg', style: `--gc:var(${gv})` }, hullLayer);
+        hg.dataset.group = g.name;
+        const rect = el('rect', { class: 'hull', x: b.x, y: b.y, width: b.w, height: b.h, rx: 14 }, hg);
+        const lab = el('text', { class: 'hull-label', x: b.x + 13, y: b.y + 19 }, hg);
+        lab.textContent = `${g.name}  · ${members.length}`;
+        hullByGroup[g.name] = { rect, lab };
+      }
     }
 
     // 노드
@@ -191,7 +229,6 @@ const ERD = (() => {
     g.dataset.name = t.name;
     el('rect', { class: 'box', width: p.w, height: p.h, rx: 10 }, g);
     el('path', { class: 'hd', d: `M0 10 a10 10 0 0 1 10 -10 H${p.w - 10} a10 10 0 0 1 10 10 V${HDR} H0 Z` }, g);
-    el('rect', { class: 'accentbar', x: 0, y: 4, width: 3, height: p.h - 8, rx: 1.5 }, g);
     const title = el('text', { class: 'title', x: 11, y: 17 }, g);
     title.textContent = trunc(t.name, 26);
     let bx = 11 + Math.min(t.name.length, 26) * 6.9 + 6;
@@ -711,6 +748,7 @@ const ERD = (() => {
     mount(svgEl, callbacks) { svg = svgEl; cb = callbacks; hookViewport(); mountMinimap(); },
     async load(m, s, state) {
       model = m; sem = s; S = state;
+      loadLayoutMode();
       await computeLayout();
       render();
       fit();
@@ -720,6 +758,18 @@ const ERD = (() => {
     rerender() { render(); if (S.selected) select(S.selected); applyFilter(); },
     select, fit, fitIfPending, centerOn, applyFilter, applyHubToggles,
     async resetLayout() { if (!model) return; clearPositions(); await computeLayout(); render(); fit(); applyFilter(); if (S.selected) select(S.selected); },
+    // 하단 정렬 바: 방식 변경 → 커스텀 배치 폐기, 재배치 후 저장(재시작에도 유지)
+    async arrange(mode) {
+      if (!model || !MODES.includes(mode)) return;
+      layoutMode = mode;
+      try { localStorage.setItem(layStoreKey(), mode); } catch {}
+      clearPositions();
+      await computeLayout();
+      savePositions();
+      render(); fit(); applyFilter();
+      if (S.selected) select(S.selected);
+    },
+    getLayoutMode: () => layoutMode,
     hasCustomLayout: () => customLayout,
   };
 })();

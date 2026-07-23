@@ -3,13 +3,15 @@ const fs = require('fs');
 const path = require('path');
 const { parseDbmlFile } = require('./src/parse');
 
-// CLI: electron . [file.dbml] [--screenshot out.png] [--focus table]
+// CLI: electron . [file.dbml] [--screenshot out.png] [--focus table] [--theme light|dark] [--side open|closed] [--layout group|lr|tb|grid]
 const argv = process.argv.slice(app.isPackaged ? 1 : 2);
-const cli = { file: null, screenshot: null, focus: null, theme: null };
+const cli = { file: null, screenshot: null, focus: null, theme: null, side: null, layout: null };
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--screenshot') cli.screenshot = argv[++i];
   else if (argv[i] === '--focus') cli.focus = argv[++i];
   else if (argv[i] === '--theme') cli.theme = argv[++i];
+  else if (argv[i] === '--side') cli.side = argv[++i];
+  else if (argv[i] === '--layout') cli.layout = argv[++i];
   else if (!argv[i].startsWith('-')) cli.file = argv[i];
 }
 
@@ -35,12 +37,12 @@ function sendModel(filePath) {
     currentFile = filePath;
     rememberFile(filePath);
     watchFile(filePath);
-    win.webContents.send('model', { model, path: filePath, focus: cli.focus, theme: cli.theme, error: null });
-    cli.focus = null; cli.theme = null; // 최초 1회만 적용 — 재파싱마다 리셋되지 않게
+    win.webContents.send('model', { model, path: filePath, focus: cli.focus, theme: cli.theme, side: cli.side, layout: cli.layout, error: null });
+    cli.focus = null; cli.theme = null; cli.side = null; cli.layout = null; // 최초 1회만 적용 — 재파싱마다 리셋되지 않게
     win.setTitle(`schema-lens — ${path.basename(filePath)}`);
     app.addRecentDocument(filePath);
   } catch (e) {
-    win.webContents.send('model', { model: null, path: filePath, focus: null, theme: cli.theme, error: String(e.message || e) });
+    win.webContents.send('model', { model: null, path: filePath, focus: null, theme: cli.theme, side: cli.side, error: String(e.message || e) });
   }
 }
 
@@ -70,8 +72,11 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1560, height: 1000,
     show: true,
-    backgroundColor: cli.theme === 'dark' ? '#0b0f15' : '#eef1f5', // 라이트가 기본
-
+    backgroundColor: cli.theme === 'dark' ? '#111113' : '#ebebeb', // 라이트가 기본
+    // 타이틀바 제거 — 신호등을 사이드바 상단에 인셋 (GPT 데스크톱앱 방식, macOS 한정)
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hidden', trafficLightPosition: { x: 16, y: 16 } }
+      : {}),
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
   win.loadFile('renderer/index.html');

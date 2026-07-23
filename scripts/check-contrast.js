@@ -48,8 +48,16 @@ function run(theme, vars) {
     ['faint/card', solid('--faint'), solid('--card')],
     ['faint/bg', solid('--faint'), solid('--bg')],
     ['accent-ink/bg', solid('--accent-ink'), solid('--bg')],
-    ['accent-ink/accent-soft+bg', solid('--accent-ink'), tinted('--accent-soft', '--bg')],
+    ['accent-ink/accent-soft+card', solid('--accent-ink'), tinted('--accent-soft', '--card')], // 칩은 카드/패널 위에 얹힘
     ['on-accent/accent', solid('--on-accent'), solid('--accent')],
+    ['on-primary/primary', solid('--on-primary'), solid('--primary')],
+    ['muted-s/panel', solid('--muted-s'), solid('--panel')],
+    ['faint/panel', solid('--faint'), solid('--panel')],
+    ['muted-s/card-2', solid('--muted-s'), solid('--card-2')],
+    ['faint/card-2', solid('--faint'), solid('--card-2')],
+    ['ink-2/card-2', solid('--ink-2'), solid('--card-2')],
+    ['muted-s/surface', solid('--muted-s'), solid('--surface')],
+    ['faint/surface', solid('--faint'), solid('--surface')],
     ['pk/pk-bg+card', solid('--pk'), tinted('--pk-bg', '--card')],
     ['danger/danger-surface', solid('--danger'), parseColor(vars['--danger-surface'], vars).rgb],
     ['danger/card', solid('--danger'), solid('--card')],
@@ -64,6 +72,10 @@ function run(theme, vars) {
   pairs.push(['logical/tint+card', solid('--logical'), selfTint('--logical')]);
   pairs.push(['uq/uq-bg+card', solid('--uq'), tinted('--uq-bg', '--card')]);
   for (let i = 0; i <= 9; i++) pairs.push([`gc-${i}/card`, solid(`--gc-${i}`), solid('--card')]);
+  for (let i = 0; i <= 9; i++) pairs.push([`gc-${i}/surface`, solid(`--gc-${i}`), solid('--surface')]); // 헐 라벨은 서페이스 위에 그려짐
+  // 솔리드 카드 헤더의 타이틀 텍스트 (dbdiagram 문법)
+  for (const gv of [...Array.from({ length: 10 }, (_, i) => `--gc-${i}`), '--gc-x'])
+    pairs.push([`hd-ink/${gv.slice(2)}`, solid('--hd-ink'), solid(gv)]);
   let fail = 0;
   for (const [name, f, b] of pairs) {
     const r = ratio(lum ? f : f, b); // eslint 무시

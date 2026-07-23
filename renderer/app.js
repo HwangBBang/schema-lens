@@ -3,6 +3,8 @@
   // 기본 테마는 라이트. 사용자가 토글하면 localStorage로 유지, CLI --theme은 세션 한정 오버라이드.
   document.documentElement.setAttribute('data-theme',
     document.documentElement.getAttribute('data-theme') || localStorage.getItem('dbv-theme') || 'light');
+  // macOS는 타이틀바 없이 신호등이 사이드바 상단에 겹침 — 여백·드래그 영역 활성화
+  if (navigator.platform.startsWith('Mac')) document.body.classList.add('titlebar-hidden');
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -95,17 +97,20 @@
   }
 
   // ── 사이드바 ──
+  const grpStoreLoad = () => { try { return JSON.parse(localStorage.getItem('dbv-grps') || '{}'); } catch { return {}; } };
+  const grpStoreSave = (m) => { try { localStorage.setItem('dbv-grps', JSON.stringify(m)); } catch {} };
   function buildSidebar() {
     const list = $('list');
     list.innerHTML = '';
+    const collapsed = grpStoreLoad();
     const grouped = new Set();
-    const addItem = (t, gv) => {
+    const addItem = (box, t, gv) => {
       const it = document.createElement('div');
       it.className = 'item'; it.dataset.name = t.name; it.tabIndex = 0;
       it.setAttribute('role', 'button');
       it.style.setProperty('--gc', `var(${gv})`);
       const d = (S.sem.tableMeta[t.name] || {}).degree || 0;
-      it.innerHTML = `<span class="nm">${esc(t.name)}</span><span class="deg">${d}</span>`;
+      it.innerHTML = `<i class="dot"></i><span class="nm">${esc(t.name)}</span><span class="deg">${d}</span>`;
       const act = () => {
         if (S.mode === 'erd') { S.selected = t.name; ERD.select(t.name); ERD.centerOn(t.name); }
         else go(t.name);
@@ -113,33 +118,48 @@
       };
       it.addEventListener('click', act);
       it.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); act(); } });
-      list.appendChild(it);
+      box.appendChild(it);
+    };
+    // 그룹 = 접을 수 있는 섹션 (상태는 그룹명 기준 localStorage 유지)
+    const addSection = (gname, gv, members) => {
+      const lab = document.createElement('button');
+      lab.className = 'grp-lab'; lab.style.setProperty('--gc', `var(${gv})`);
+      lab.setAttribute('aria-expanded', String(!collapsed[gname]));
+      lab.innerHTML = `<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>` +
+        `<i></i><span class="gn">${esc(gname)}</span><span class="gcnt">${members.length}</span>`;
+      const box = document.createElement('div');
+      box.className = 'grp-items' + (collapsed[gname] ? ' collapsed' : '');
+      members.forEach((t) => addItem(box, t, gv));
+      lab.addEventListener('click', () => {
+        const m = grpStoreLoad();
+        m[gname] = !box.classList.contains('collapsed');
+        if (!m[gname]) delete m[gname];
+        grpStoreSave(m);
+        box.classList.toggle('collapsed', !!m[gname]);
+        lab.setAttribute('aria-expanded', String(!m[gname]));
+      });
+      list.appendChild(lab);
+      list.appendChild(box);
     };
     for (const g of S.model.groups) {
       const members = S.model.tables.filter((t) => t.group === g.name);
       if (!members.length) continue;
       members.forEach((t) => grouped.add(t.name));
-      const gv = S.groupColor[g.name];
-      const lab = document.createElement('div');
-      lab.className = 'grp-lab'; lab.style.setProperty('--gc', `var(${gv})`);
-      lab.innerHTML = `<i></i>${esc(g.name)}`;
-      list.appendChild(lab);
-      members.forEach((t) => addItem(t, gv));
+      addSection(g.name, S.groupColor[g.name], members);
     }
     const rest = S.model.tables.filter((t) => !grouped.has(t.name));
-    if (rest.length) {
-      const lab = document.createElement('div');
-      lab.className = 'grp-lab'; lab.style.setProperty('--gc', 'var(--gc-x)');
-      lab.innerHTML = `<i></i>ungrouped`;
-      list.appendChild(lab);
-      rest.forEach((t) => addItem(t, '--gc-x'));
-    }
+    if (rest.length) addSection('ungrouped', '--gc-x', rest);
   }
   function syncSidebarActive() {
     const active = S.mode === 'erd' ? S.selected : S.focusTable;
     $('list').querySelectorAll('.item').forEach((i) => i.classList.toggle('active', i.dataset.name === active));
     const a = $('list').querySelector('.item.active');
-    if (a) a.scrollIntoView({ block: 'nearest' });
+    if (a) {
+      // 활성 항목이 접힌 그룹 안이면 펼쳐서 보이게
+      const box = a.closest('.grp-items');
+      if (box && box.classList.contains('collapsed')) box.previousElementSibling.click();
+      a.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   // ── 범례 ──
@@ -163,9 +183,11 @@
   }
 
   // ── 모델 수신 ──
-  async function onModel({ model, path, focus, theme, error }) {
+  async function onModel({ model, path, focus, theme, side, layout, error }) {
     if (theme === 'light' || theme === 'dark')
       document.documentElement.setAttribute('data-theme', theme);
+    if (side === 'open' || side === 'closed')
+      applySide(side === 'open', false); // CLI 오버라이드 — 세션 한정, localStorage 미기록
     if (error) {
       if (S.model && S.filePath === path) {
         // 편집 중 일시적 문법 오류 — 기존 다이어그램을 유지하고 배너만 표시
@@ -210,15 +232,18 @@
 
     $('welcome').style.display = 'none';
     $('welcome-err').hidden = true;
-    $('legend').hidden = false;
     $('brand-title').textContent = path.split('/').pop();
     $('brand-sub').textContent =
       `${model.tables.length} tables · ${model.refs.length} refs (실 ${model.refs.filter((r) => r.kind === 'real').length} / 논리 ${model.refs.filter((r) => r.kind === 'logical').length})` +
       (model.meta.projectName ? ` · ${model.meta.projectName}` : '');
+    $('stat-chip').textContent = `${model.tables.length} tables · ${model.refs.length} refs`;
+    $('stat-chip').hidden = false;
 
     buildSidebar(); buildLegend();
     Focus.init(model, S.sem, S, { go, tooltip });
     await ERD.load(model, S.sem, S);
+    if (layout) await ERD.arrange(layout); // CLI --layout — arrange와 동일하게 저장까지 수행
+    syncArrange(); // 파일별로 저장된 정렬 방식 복원 반영
     setMode(S.mode); // focus 모드면 여기서 렌더까지 수행
     if (!firstRenderDone) {
       firstRenderDone = true;
@@ -254,14 +279,28 @@
     $('c-keys').setAttribute('aria-pressed', m === 'keys');
     $('c-all').setAttribute('aria-pressed', m === 'all');
     if (S.model) await ERD.load(S.model, S.sem, S);
+    if (S.mode === 'focus' && S.focusTable) Focus.render(S.focusTable); // 포커스 카드도 같은 규칙 적용
   };
   $('c-keys').addEventListener('click', () => setCols('keys'));
   $('c-all').addEventListener('click', () => setCols('all'));
   $('fit').addEventListener('click', () => ERD.fit());
-  const applySide = (open) => {
+  // 하단 정렬 바 — 지도 아래 가로 배치
+  const syncArrange = () => {
+    const m = ERD.getLayoutMode();
+    $('arrange').querySelectorAll('button').forEach((b) =>
+      b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+  };
+  $('arrange').querySelectorAll('button').forEach((b) =>
+    b.addEventListener('click', async () => { await ERD.arrange(b.dataset.mode); syncArrange(); }));
+  $('legend-btn').addEventListener('click', () => {
+    const l = $('legend');
+    l.hidden = !l.hidden;
+    $('legend-btn').setAttribute('aria-pressed', String(!l.hidden));
+  });
+  const applySide = (open, persist = true) => {
     document.body.classList.toggle('side-collapsed', !open);
     $('side-toggle').setAttribute('aria-pressed', String(open));
-    localStorage.setItem('dbv-side', open ? 'open' : 'closed');
+    if (persist) localStorage.setItem('dbv-side', open ? 'open' : 'closed');
     ERD.fitIfPending(); // 캔버스 폭 변화에 맞춰 미니맵 뷰포트 갱신
   };
   $('side-toggle').addEventListener('click', () =>
@@ -295,6 +334,7 @@
   // ── 검색 ──
   $('q').addEventListener('input', () => {
     const v = $('q').value.trim().toLowerCase();
+    $('list').classList.toggle('searching', !!v); // 검색 중엔 접힌 그룹도 임시로 펼쳐 보임
     $('list').querySelectorAll('.item').forEach((i) =>
       i.classList.toggle('hide', !!v && !i.dataset.name.toLowerCase().includes(v)));
   });
