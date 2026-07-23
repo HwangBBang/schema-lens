@@ -3,15 +3,16 @@ const fs = require('fs');
 const path = require('path');
 const { parseDbmlFile } = require('./src/parse');
 
-// CLI: electron . [file.dbml] [--screenshot out.png] [--focus table] [--theme light|dark] [--side open|closed] [--layout group|lr|tb|grid]
+// CLI: electron . [file.dbml] [--screenshot out.png] [--focus table] [--theme light|dark] [--side open|closed] [--layout group|lr|tb|grid] [--view library|extract]
 const argv = process.argv.slice(app.isPackaged ? 1 : 2);
-const cli = { file: null, screenshot: null, focus: null, theme: null, side: null, layout: null };
+const cli = { file: null, screenshot: null, focus: null, theme: null, side: null, layout: null, view: null };
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--screenshot') cli.screenshot = argv[++i];
   else if (argv[i] === '--focus') cli.focus = argv[++i];
   else if (argv[i] === '--theme') cli.theme = argv[++i];
   else if (argv[i] === '--side') cli.side = argv[++i];
   else if (argv[i] === '--layout') cli.layout = argv[++i];
+  else if (argv[i] === '--view') cli.view = argv[++i];
   else if (!argv[i].startsWith('-')) cli.file = argv[i];
 }
 
@@ -30,12 +31,32 @@ function recallFile() {
   } catch { return null; }
 }
 
+// ── 스키마 라이브러리: 등록된 .dbml 파일 목록 + 메타 캐시 (SSOT는 파일 자체) ──
+const libStore = () => path.join(app.getPath('userData'), 'library.json');
+function libLoad() {
+  try { const l = JSON.parse(fs.readFileSync(libStore(), 'utf8')); return Array.isArray(l) ? l : []; } catch { return []; }
+}
+function libSave(list) {
+  try { fs.writeFileSync(libStore(), JSON.stringify(list, null, 2)); } catch {}
+}
+function libTouch(filePath, stats) {
+  const list = libLoad();
+  let e = list.find((x) => x.path === filePath);
+  const now = new Date().toISOString();
+  if (!e) { e = { name: path.basename(filePath), path: filePath, addedAt: now }; list.push(e); }
+  e.name = path.basename(filePath);
+  e.lastOpenedAt = now;
+  if (stats) e.stats = stats;
+  libSave(list);
+}
+
 function sendModel(filePath) {
   if (!win) return;
   try {
     const model = parseDbmlFile(filePath);
     currentFile = filePath;
     rememberFile(filePath);
+    libTouch(filePath, { tables: model.tables.length, refs: model.refs.length });
     watchFile(filePath);
     win.webContents.send('model', { model, path: filePath, focus: cli.focus, theme: cli.theme, side: cli.side, layout: cli.layout, error: null });
     cli.focus = null; cli.theme = null; cli.side = null; cli.layout = null; // 최초 1회만 적용 — 재파싱마다 리셋되지 않게
@@ -84,6 +105,10 @@ function createWindow() {
     const f = currentFile || (cli.file ? path.resolve(cli.file) : recallFile());
     cli.file = null; // 이후 리로드/재생성 시 현재 파일 우선
     if (f) sendModel(f);
+    if (cli.view === 'library' || cli.view === 'extract') { // 스크린샷 검증용 세션 한정 오버라이드
+      win.webContents.send('show-view', cli.view);
+      cli.view = null;
+    }
   });
   win.on('closed', () => { win = null; });
   if (cli.screenshot) {
@@ -97,6 +122,43 @@ function createWindow() {
 
 ipcMain.handle('open-file-dialog', () => openDialog());
 ipcMain.on('open-path', (_e, p) => { if (p && fs.existsSync(p)) sendModel(p); });
+
+// ── 라이브러리 / SQL→DBML 추출 IPC ──
+ipcMain.handle('library-list', () =>
+  libLoad()
+    .map((e) => ({ ...e, missing: !fs.existsSync(e.path) }))
+    .sort((a, b) => String(b.lastOpenedAt || '').localeCompare(String(a.lastOpenedAt || ''))));
+ipcMain.handle('library-remove', (_e, p) => { libSave(libLoad().filter((x) => x.path !== p)); return true; });
+ipcMain.handle('extract-convert', (_e, { sql, dialect }) => {
+  try {
+    const { importer } = require('@dbml/core');
+    return { dbml: importer.import(String(sql || ''), dialect === 'mysql' ? 'mysql' : 'postgres') };
+  } catch (err) {
+    return { error: String(err.message || err) };
+  }
+});
+ipcMain.handle('extract-save', async (_e, dbml) => {
+  const r = await dialog.showSaveDialog(win, {
+    defaultPath: 'schema.dbml',
+    filters: [{ name: 'DBML', extensions: ['dbml'] }],
+  });
+  if (r.canceled || !r.filePath) return { canceled: true };
+  try {
+    fs.writeFileSync(r.filePath, dbml);
+    sendModel(r.filePath); // 저장 즉시 라이브러리 등록 + 렌더
+    return { path: r.filePath };
+  } catch (err) {
+    return { error: String(err.message || err) };
+  }
+});
+ipcMain.handle('open-sql-dialog', async () => {
+  const r = await dialog.showOpenDialog(win, {
+    filters: [{ name: 'SQL', extensions: ['sql', 'ddl', 'txt'] }, { name: 'All', extensions: ['*'] }],
+    properties: ['openFile'],
+  });
+  if (r.canceled || !r.filePaths[0]) return null;
+  try { return fs.readFileSync(r.filePaths[0], 'utf8'); } catch { return null; }
+});
 ipcMain.on('render-done', async (_e, info) => {
   if (!cli.screenshot || !win) return;
   try {
@@ -119,6 +181,9 @@ function buildMenu() {
       submenu: [
         { label: 'Open DBML…', accelerator: 'CmdOrCtrl+O', click: () => openDialog() },
         { label: 'Reload File', accelerator: 'CmdOrCtrl+R', click: () => { if (currentFile) sendModel(currentFile); } },
+        { type: 'separator' },
+        { label: '스키마 라이브러리', accelerator: 'CmdOrCtrl+L', click: () => win && win.webContents.send('show-view', 'library') },
+        { label: 'SQL에서 DBML 추출…', accelerator: 'CmdOrCtrl+Shift+E', click: () => win && win.webContents.send('show-view', 'extract') },
         { type: 'separator' },
         { role: process.platform === 'darwin' ? 'close' : 'quit' },
       ],

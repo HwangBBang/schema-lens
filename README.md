@@ -85,6 +85,15 @@ schema-lens addresses this in three ways:
   <img alt="Focus mode: three-column navigation around a single table" src="docs/focus-light.png">
 </picture>
 
+**Schema library & SQL import**
+- The start screen is a schema library: every file you open is registered as a card
+  (name, path, table/ref counts, last opened) — click to reopen, remove without
+  deleting the file. Reachable anytime via `⌘L` or the sidebar header dropdown.
+- **Extract DBML from SQL** (`⌘⇧E`): paste DDL or open a `.sql` file
+  (e.g. `pg_dump --schema-only` output), pick the dialect (PostgreSQL / MySQL),
+  preview the converted DBML, then save & open it in one step. Conversion runs on
+  the bundled `@dbml/core` importer — no database connection required.
+
 **Editing workflow**
 - Open via `⌘`/`Ctrl`+`O`, drag & drop, or CLI argument; the last file is restored on launch
 - The open file is watched — edits re-parse and re-render automatically

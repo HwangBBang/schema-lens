@@ -162,6 +162,117 @@
     }
   }
 
+  // ── 스키마 라이브러리 / SQL 추출 뷰 ──
+  const xSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  async function refreshLibrary() {
+    const list = await window.dbv.libraryList();
+    const grid = $('lib-grid');
+    grid.innerHTML = '';
+    $('lib-empty').hidden = list.length > 0;
+    for (const e of list) {
+      const c = document.createElement('div');
+      c.className = 'lib-card' + (e.missing ? ' missing' : '');
+      c.setAttribute('role', 'button'); c.tabIndex = 0; c.title = e.path;
+      const st = e.stats ? `${e.stats.tables} tables · ${e.stats.refs} refs` : '아직 열지 않음';
+      const when = e.lastOpenedAt ? new Date(e.lastOpenedAt).toLocaleDateString('ko-KR') : '';
+      c.innerHTML =
+        `<span class="nm">${esc(e.name)}</span><span class="pth">${esc(e.path)}</span>` +
+        `<span class="meta">${esc(st)}${e.missing ? ' · 파일 없음' : ''}${when ? ' · ' + esc(when) : ''}</span>` +
+        `<span class="rm" role="button" tabindex="0" title="목록에서 제거 (파일은 지우지 않음)">${xSvg}</span>`;
+      const open = () => { if (!e.missing) window.dbv.openPath(e.path); };
+      c.addEventListener('click', open);
+      c.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); open(); } });
+      c.querySelector('.rm').addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        await window.dbv.libraryRemove(e.path);
+        refreshLibrary();
+      });
+      grid.appendChild(c);
+    }
+  }
+  function showWelcome(view) {
+    $('welcome').style.display = 'flex';
+    $('lib-view').hidden = view === 'extract';
+    $('ext-view').hidden = view !== 'extract';
+    $('lib-close').hidden = !S.model;
+    closeSchemaMenu();
+    if (view !== 'extract') refreshLibrary();
+  }
+  function hideWelcome() { $('welcome').style.display = 'none'; }
+  const welcomeVisible = () => $('welcome').style.display !== 'none';
+  $('lib-extract').addEventListener('click', () => showWelcome('extract'));
+  $('ext-back').addEventListener('click', () => showWelcome('library'));
+  $('lib-close').addEventListener('click', hideWelcome);
+
+  // SQL → DBML 추출
+  let dialect = 'postgres';
+  const setDialect = (d) => {
+    dialect = d;
+    $('d-pg').setAttribute('aria-pressed', d === 'postgres');
+    $('d-my').setAttribute('aria-pressed', d === 'mysql');
+  };
+  $('d-pg').addEventListener('click', () => setDialect('postgres'));
+  $('d-my').addEventListener('click', () => setDialect('mysql'));
+  $('ext-open-sql').addEventListener('click', async () => {
+    const sql = await window.dbv.openSqlDialog();
+    if (sql != null) $('ext-sql').value = sql;
+  });
+  const extErr = (msg) => {
+    $('ext-err').hidden = !msg;
+    $('ext-err').textContent = msg || '';
+  };
+  $('ext-convert').addEventListener('click', async () => {
+    const sql = $('ext-sql').value;
+    if (!sql.trim()) { extErr('변환할 SQL을 입력하세요.'); return; }
+    const r = await window.dbv.extractConvert(sql, dialect);
+    if (r.error) { extErr(`변환 실패: ${r.error}`); $('ext-dbml').value = ''; $('ext-save').disabled = true; return; }
+    extErr(null);
+    $('ext-dbml').value = r.dbml;
+    $('ext-save').disabled = !r.dbml.trim();
+  });
+  $('ext-save').addEventListener('click', async () => {
+    const r = await window.dbv.extractSave($('ext-dbml').value);
+    if (r && r.error) extErr(`저장 실패: ${r.error}`);
+    // 성공 시 main이 sendModel → onModel이 라이브러리 갱신·화면 전환
+  });
+
+  // 사이드바 스키마 전환 드롭다운
+  function closeSchemaMenu() { $('schema-menu').hidden = true; }
+  async function openSchemaMenu() {
+    const m = $('schema-menu');
+    const list = await window.dbv.libraryList();
+    m.innerHTML = '';
+    for (const e of list.slice(0, 12)) {
+      const b = document.createElement('button');
+      b.className = 'smi' + (e.path === S.filePath ? ' cur' : '');
+      b.disabled = !!e.missing;
+      b.title = e.path;
+      b.innerHTML = `<span class="nm">${esc(e.name)}</span>` +
+        `<span class="meta">${e.stats ? esc(String(e.stats.tables)) + ' tables' : ''}</span>`;
+      b.addEventListener('click', () => { closeSchemaMenu(); if (e.path !== S.filePath) window.dbv.openPath(e.path); });
+      m.appendChild(b);
+    }
+    const lib = document.createElement('button');
+    lib.className = 'smi lib-link';
+    lib.textContent = '스키마 라이브러리 열기  ⌘L';
+    lib.addEventListener('click', () => { closeSchemaMenu(); showWelcome('library'); });
+    m.appendChild(lib);
+    const sh = $('side-head');
+    m.style.top = (sh.offsetTop + sh.offsetHeight + 4) + 'px';
+    m.hidden = false;
+  }
+  $('side-head').addEventListener('click', () => {
+    if ($('schema-menu').hidden) openSchemaMenu(); else closeSchemaMenu();
+  });
+  $('side-head').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('side-head').click(); }
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#schema-menu') && !e.target.closest('#side-head')) closeSchemaMenu();
+  });
+  window.dbv.onShowView((v) => showWelcome(v));
+  refreshLibrary(); // 시작 시 파일이 없으면 라이브러리가 첫 화면
+
   // ── 범례 ──
   function buildLegend() {
     $('tlegend').innerHTML = Object.values(S.sem.TYPES)
@@ -194,7 +305,7 @@
         $('errbar').hidden = false;
         $('errbar-msg').textContent = ` ${error}`;
       } else {
-        $('welcome').style.display = 'flex';
+        showWelcome('library');
         $('welcome-err').hidden = false;
         $('welcome-err').textContent = `파싱 실패: ${path}\n\n${error}`;
       }
@@ -230,7 +341,7 @@
       else console.warn(`--focus ${focus}: 테이블이 없어 무시`);
     }
 
-    $('welcome').style.display = 'none';
+    hideWelcome();
     $('welcome-err').hidden = true;
     $('brand-title').textContent = path.split('/').pop();
     $('brand-sub').textContent =
@@ -341,7 +452,10 @@
 
   // ── 키보드 ──
   document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT') return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 'Escape' && !$('schema-menu').hidden) { closeSchemaMenu(); return; }
+    if (e.key === 'Escape' && welcomeVisible() && S.model) { hideWelcome(); return; }
+    if (welcomeVisible()) return; // 라이브러리/추출 화면에선 캔버스 단축키 비활성
     if (e.key === '0') ERD.fit();
     if (e.key === 'Escape') {
       if (S.mode === 'erd') { S.selected = null; ERD.select(null); syncSidebarActive(); }
