@@ -16,6 +16,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # 태그와 package.json 버전이 어긋나면 잘못된 번호로 발행되므로 여기서 멈춘다
+      - name: 태그와 package.json 버전 일치 확인
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p 'require("./package.json").version')"
+          if [ "$tag" != "$pkg" ]; then
+            echo "태그 $GITHUB_REF_NAME 와 package.json $pkg 가 다릅니다"
+            exit 1
+          fi
+          echo "버전 $pkg 확인"
       - run: npm ci
       - run: npm test
       - run: npm run test:contrast
