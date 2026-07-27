@@ -11,3 +11,10 @@ assets/schema-reconstruction.json
 assets/reference-explorer.html
 scripts/check-local.js
 HANDOFF.md
+
+# electron-builder 산출물
+dist/
+
+# 로컬 전용 — 개인 워크플로우 설정·설계 메모
+.claude/
+docs/superpowers/

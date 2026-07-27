@@ -62,8 +62,7 @@ button{font-family:inherit}
 
 /* 타이틀바 숨김(macOS): 신호등(x16,y16)이 사이드바 상단에 겹침 — GPT 데스크톱앱 문법 */
 body.titlebar-hidden .side-head{padding-top:36px}
-body.titlebar-hidden .side-head,
-body.titlebar-hidden .ptoolbar{-webkit-app-region:drag} /* 상단 스트립으로 창 드래그 */
+body.titlebar-hidden .ptoolbar{-webkit-app-region:drag} /* 상단 스트립으로 창 드래그 (side-head는 스키마 전환 버튼) */
 body.titlebar-hidden .ptoolbar button,
 body.titlebar-hidden .ptoolbar .seg,
 body.titlebar-hidden .ptoolbar .crumb,
@@ -71,7 +70,22 @@ body.titlebar-hidden .ptoolbar .statchip{-webkit-app-region:no-drag}
 body.titlebar-hidden.side-collapsed .ptoolbar{padding-left:76px} /* 접힘 시 신호등 자리 확보 */
 aside.side{flex:0 0 240px;display:flex;flex-direction:column;min-height:0}
 body.side-collapsed aside.side{display:none}
-.side-head{display:flex;align-items:center;gap:9px;padding:6px 8px 12px}
+aside.side{position:relative}
+.side-head{display:flex;align-items:center;gap:9px;padding:6px 8px 12px;cursor:pointer;border-radius:10px}
+.side-head:hover{background:var(--primary-soft)}
+.side-head .sw-chev{width:13px;height:13px;color:var(--faint);margin-left:auto;flex:0 0 auto}
+.schema-menu{position:absolute;left:6px;right:6px;z-index:60;background:var(--panel);border:1px solid var(--line);
+  border-radius:12px;box-shadow:var(--shadow);padding:6px;max-height:50vh;overflow-y:auto;
+  display:flex;flex-direction:column;gap:1px}
+.smi{display:flex;align-items:center;gap:8px;width:100%;border:0;background:transparent;border-radius:8px;
+  padding:7px 10px;cursor:pointer;font-size:12px;color:var(--ink-2);text-align:left;font-family:inherit}
+.smi:hover:not(:disabled){background:var(--primary-soft);color:var(--ink)}
+.smi:disabled{opacity:.45;cursor:default}
+.smi .nm{font-family:var(--mono);font-size:11.5px;font-weight:650;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.smi.cur{background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.smi .meta{margin-left:auto;font-size:10px;color:var(--faint);flex:0 0 auto}
+.smi.lib-link{margin-top:4px;border-top:1px solid var(--line-2);border-radius:0 0 8px 8px;color:var(--muted-s)}
 .applogo{width:30px;height:30px;border-radius:9px;background:var(--primary);color:var(--on-primary);
   display:flex;align-items:center;justify-content:center;flex:0 0 auto}
 .applogo svg{width:16px;height:16px}
@@ -369,12 +383,49 @@ svg.filter-real .edge.logical{display:none!important}
 .f-foot{padding:8px 12px;border-top:1px solid var(--line-2);display:flex;gap:12px;font-size:10.5px;color:var(--muted-s);background:var(--card-2)}
 .f-foot b{color:var(--ink)}
 
-/* ── welcome / drop ── */
-#welcome{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;
-  background:var(--panel);z-index:40}
+/* ── welcome: 스키마 라이브러리 + SQL 추출 ── */
+#welcome{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--panel);z-index:40;overflow:hidden}
+#welcome .lib,#welcome .extract{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+.lib-head{display:flex;align-items:center;gap:8px;padding:13px 18px;border-bottom:1px solid var(--line);flex:0 0 auto}
+.lib-head h2{margin:0;font-size:14px;font-weight:700;letter-spacing:-.01em}
+.ghostbtn{font-size:12px;font-weight:600;color:var(--ink-2);background:var(--card);border:1px solid var(--line);
+  border-radius:8px;padding:7px 12px;cursor:pointer;white-space:nowrap}
+.ghostbtn:hover{color:var(--ink);border-color:var(--muted-s)}
+.ghostbtn.sm{padding:2px 8px;font-size:10.5px;margin-left:8px;font-weight:600}
+.lib-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;padding:16px 18px;
+  overflow-y:auto;align-content:start}
+.lib-grid:empty{display:none}
+.lib-card{position:relative;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:12px 14px;cursor:pointer;display:flex;flex-direction:column;gap:4px;font-family:inherit;color:var(--ink-2)}
+.lib-card:hover{border-color:var(--muted-s);box-shadow:var(--shadow)}
+.lib-card .nm{font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:22px}
+.lib-card .pth{font-size:10.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lib-card .meta{font-size:11px;color:var(--muted-s)}
+.lib-card.missing{opacity:.5;cursor:default}
+.lib-card.missing:hover{border-color:var(--line);box-shadow:none}
+.lib-card .rm{position:absolute;top:8px;right:8px;width:24px;height:24px;display:flex;align-items:center;
+  justify-content:center;border-radius:6px;color:var(--faint);opacity:0}
+.lib-card:hover .rm{opacity:1}
+.lib-card .rm:hover{background:var(--primary-soft);color:var(--ink)}
+.lib-card .rm svg{width:12px;height:12px}
+.lib-empty{flex:1 1 auto;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px}
 #welcome .glyph{width:150px;height:150px;border-radius:50%;background:var(--card-2);
   display:flex;align-items:center;justify-content:center;color:var(--faint);margin-bottom:4px}
 #welcome .glyph svg{width:52px;height:52px}
+/* extract 뷰 */
+.ext-body{display:flex;gap:14px;padding:14px 18px;flex:1 1 auto;min-height:0}
+.ext-col{flex:1 1 50%;display:flex;flex-direction:column;gap:6px;min-width:0}
+.ext-lab{display:flex;align-items:center;font-size:11px;font-weight:650;color:var(--muted-s);
+  text-transform:uppercase;letter-spacing:.04em}
+.ext-body textarea{flex:1 1 auto;resize:none;font-family:var(--mono);font-size:12px;line-height:1.55;color:var(--ink);
+  background:var(--card-2);border:1px solid var(--line);border-radius:10px;padding:12px;outline:none;
+  -webkit-user-select:text;user-select:text}
+.ext-body textarea:focus{border-color:var(--muted-s);box-shadow:0 0 0 3px var(--primary-soft)}
+.ext-body textarea::placeholder{color:var(--faint)}
+.ext-foot{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line);flex:0 0 auto}
+.ext-err{font-family:var(--mono);font-size:11px;color:var(--danger);white-space:pre-wrap;max-height:64px;
+  overflow:auto;-webkit-user-select:text;user-select:text}
 #errbar{position:absolute;top:0;left:0;right:0;z-index:45;display:flex;gap:8px;align-items:flex-start;
   padding:8px 16px;background:var(--danger-surface);border-bottom:1px solid var(--danger-border);
   font-family:var(--mono);font-size:11px;color:var(--ink-2);white-space:pre-wrap;-webkit-user-select:text;user-select:text}
@@ -384,7 +435,8 @@ svg.filter-real .edge.logical{display:none!important}
 #welcome kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-radius:5px;padding:2px 6px;background:var(--card-2)}
 #welcome button.open{font-size:13px;font-weight:600;color:var(--on-primary);background:var(--primary);border:0;border-radius:9px;
   padding:8px 18px;cursor:pointer}
-#welcome .err{max-width:520px;font-family:var(--mono);font-size:11px;color:var(--danger);white-space:pre-wrap;
+#welcome button.open:disabled{opacity:.4;cursor:not-allowed}
+#welcome .err{max-width:640px;margin:12px 18px 0;font-family:var(--mono);font-size:11px;color:var(--danger);white-space:pre-wrap;
   background:var(--card-2);border:1px solid var(--line);border-radius:8px;padding:12px;-webkit-user-select:text;user-select:text}
 #drop-overlay{position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;
   background:color-mix(in srgb,var(--accent) 12%,transparent);border:3px dashed var(--accent);

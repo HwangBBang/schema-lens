@@ -9,12 +9,14 @@
 
 <div class="app">
   <aside class="side" id="side">
-    <div class="side-head">
+    <div class="side-head" id="side-head" role="button" tabindex="0" title="스키마 전환">
       <div class="applogo" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 9.5h18M9.5 9.5V20"/></svg>
       </div>
       <div class="brand"><h1 id="brand-title">schema-lens</h1><div class="sub" id="brand-sub">DBML을 열어 관계 구조를 확인</div></div>
+      <svg class="sw-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 10l4 4 4-4"/></svg>
     </div>
+    <div class="schema-menu" id="schema-menu" hidden></div>
     <div class="search">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.8-3.8"/></svg>
       <input id="q" type="search" placeholder="테이블 검색…" autocomplete="off" aria-label="검색">
@@ -95,14 +97,56 @@
         </div>
       </div>
       <div id="welcome">
-        <div class="glyph" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M9.5 9v11"/></svg>
+        <div class="lib" id="lib-view">
+          <div class="lib-head">
+            <h2>스키마 라이브러리</h2>
+            <div class="grow"></div>
+            <button class="ghostbtn" id="lib-extract" title="SQL DDL을 DBML로 변환 (⌘⇧E)">SQL에서 추출</button>
+            <button class="open" id="welcome-open">DBML 열기</button>
+            <button class="iconbtn" id="lib-close" title="닫기 (Esc)" aria-label="라이브러리 닫기" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+          <div class="err" id="welcome-err" hidden></div>
+          <div class="lib-grid" id="lib-grid"></div>
+          <div class="lib-empty" id="lib-empty" hidden>
+            <div class="glyph" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18M9.5 9v11"/></svg>
+            </div>
+            <div class="big">DBML 파일을 여기로 드래그하세요</div>
+            <div class="small">또는 <kbd>⌘O</kbd> 로 열기 · SQL DDL만 있다면 <b>SQL에서 추출</b>로 DBML을 만들 수 있습니다<br>
+              <code>// logical</code> 주석이 붙은 Ref는 점선(논리 FK)으로 표시됩니다</div>
+          </div>
         </div>
-        <div class="big">DBML 파일을 여기로 드래그하세요</div>
-        <div class="small">또는 <kbd>⌘O</kbd> 로 열기 · 파일이 바뀌면 자동으로 다시 그립니다<br>
-          <code>// logical</code> 주석이 붙은 Ref는 점선(논리 FK)으로 표시됩니다</div>
-        <button class="open" id="welcome-open">DBML 열기</button>
-        <div class="err" id="welcome-err" hidden></div>
+        <div class="extract" id="ext-view" hidden>
+          <div class="lib-head">
+            <button class="iconbtn" id="ext-back" title="라이브러리로" aria-label="뒤로">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <h2>SQL에서 DBML 추출</h2>
+            <div class="grow"></div>
+            <div class="seg" role="group" aria-label="SQL 방언">
+              <button id="d-pg" aria-pressed="true">PostgreSQL</button>
+              <button id="d-my" aria-pressed="false">MySQL</button>
+            </div>
+          </div>
+          <div class="ext-body">
+            <div class="ext-col">
+              <div class="ext-lab">SQL DDL<button class="ghostbtn sm" id="ext-open-sql">SQL 파일 열기</button></div>
+              <textarea id="ext-sql" spellcheck="false" placeholder="CREATE TABLE … DDL을 붙여넣으세요 (pg_dump --schema-only 산출물 등)"></textarea>
+            </div>
+            <div class="ext-col">
+              <div class="ext-lab">DBML 미리보기</div>
+              <textarea id="ext-dbml" spellcheck="false" readonly placeholder="변환 결과가 여기 표시됩니다"></textarea>
+            </div>
+          </div>
+          <div class="ext-foot">
+            <div class="ext-err" id="ext-err" hidden></div>
+            <div class="grow"></div>
+            <button class="ghostbtn" id="ext-convert">변환</button>
+            <button class="open" id="ext-save" disabled>저장하고 열기</button>
+          </div>
+        </div>
       </div>
 
       <div class="legend-pop" id="legend" hidden>

@@ -367,6 +367,43 @@ check('impact: 요약은 카테고리별 테이블 dedupe', t(() => {
   return s.cascade.filter((x) => x === 'messages').length === 1 && s.setNull.includes('messages');
 }));
 
+// ---- SQL DDL → DBML 추출 (importer) 스모크 ----
+// 앱의 "SQL에서 추출"과 같은 경로: importer 변환 결과가 자체 파서·시맨틱까지 통과해야 한다.
+const { importer } = require('@dbml/core');
+
+check('postgres DDL → DBML → 파서 왕복', (() => {
+  const dbml = importer.import(`
+    CREATE TABLE users (id uuid PRIMARY KEY, email varchar(255) UNIQUE NOT NULL);
+    CREATE TABLE posts (
+      id uuid PRIMARY KEY,
+      author_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title varchar(300)
+    );`, 'postgres');
+  const mo = parseDbml(dbml);
+  const s = Semantics.analyze(mo);
+  const ref = mo.refs.find((r) => r.child.table === 'posts');
+  return mo.tables.length === 2 && !!ref && ref.kind === 'real' &&
+    s.refMeta[ref.id].type === 'auth'; // author_id → 작성 관계로 분류
+})());
+
+check('mysql DDL → DBML → 파서 왕복', (() => {
+  const dbml = importer.import(`
+    CREATE TABLE teams (id int PRIMARY KEY AUTO_INCREMENT, name varchar(100));
+    CREATE TABLE members (
+      id int PRIMARY KEY AUTO_INCREMENT,
+      team_id int NOT NULL,
+      FOREIGN KEY (team_id) REFERENCES teams(id)
+    ) ENGINE=InnoDB;`, 'mysql');
+  const mo = parseDbml(dbml);
+  return mo.tables.length === 2 &&
+    mo.refs.some((r) => r.child.table === 'members' && r.parent.table === 'teams');
+})());
+
+check('잘못된 SQL은 예외로 표면화(조용한 성공 금지)', (() => {
+  try { importer.import('CREATE TABEL broken (', 'postgres'); return false; }
+  catch { return true; }
+})());
+
 // ---- 로컬 전용 추가 회귀(저장소 미포함 스키마 대상, 있을 때만) ----
 const localPath = path.join(__dirname, 'check-local.js');
 if (fs.existsSync(localPath)) {
