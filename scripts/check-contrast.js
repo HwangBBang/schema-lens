@@ -72,6 +72,11 @@ function run(theme, vars) {
     pairs.push([`act-${a}/card`, solid(`--act-${a}`), solid('--card')]);            // 아웃라인 칩 텍스트
     pairs.push([`act-${a}/tint+card`, solid(`--act-${a}`), selfTint(`--act-${a}`)]); // 틴트 채움 칩
   }
+  for (const d of ['add', 'del', 'chg']) {
+    pairs.push([`diff-${d}/panel`, solid(`--diff-${d}`), solid('--panel')]);      // 상단 요약 글자
+    pairs.push([`diff-${d}/card`, solid(`--diff-${d}`), solid('--card')]);        // 카드 안 컬럼 글자
+    pairs.push([`diff-${d}/tint+card`, solid(`--diff-${d}`), selfTint(`--diff-${d}`)]); // 틴트 헤더 위 글자
+  }
   pairs.push(['real/tint+card', solid('--real'), selfTint('--real')]);
   pairs.push(['logical/tint+card', solid('--logical'), selfTint('--logical')]);
   pairs.push(['uq/uq-bg+card', solid('--uq'), tinted('--uq-bg', '--card')]);

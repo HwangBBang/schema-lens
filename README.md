@@ -94,6 +94,18 @@ schema-lens addresses this in three ways:
   preview the converted DBML, then save & open it in one step. Conversion runs on
   the bundled `@dbml/core` importer — no database connection required.
 
+**Compare against the last commit**
+- If the open `.dbml` lives in a git repository, **변경 비교** puts the committed schema and
+  your working copy side by side. Both panes share one layout, so the same table sits at the
+  same spot on both sides, and zoom/pan move together.
+- Added tables and columns are green, removed ones red, changed ones amber — and the same
+  rule applies to relationship lines. A column that changed is pulled out of the "keys only"
+  fold so the edit is never hidden.
+- Table color reflects the table's own definition (columns, PK, unique, group, note).
+  A relationship change colors the line, not the tables it connects.
+- Outside a repository, or before the file's first commit, the view explains why instead of
+  showing an empty canvas.
+
 **Editing workflow**
 - Open via `⌘`/`Ctrl`+`O`, drag & drop, or CLI argument; the last file is restored on launch
 - The open file is watched — edits re-parse and re-render automatically
@@ -153,9 +165,13 @@ code 1 otherwise):
   is hidden behind a collapsed "+N more" fold it is auto-expanded; if it is not a
   neighbor of the focused table at all, the run exits with code 2.
 
+`--diff` opens the compare view (last commit vs working copy). It needs no `--focus`; if the
+file is not in a git repository the captured screen states that instead.
+
 ```bash
 npx electron . assets/example.dbml --screenshot impact.png --focus repos --impact
 npx electron . assets/example.dbml --screenshot peek.png --focus issues --peek comments
+npx electron . path/to/schema.dbml --screenshot diff.png --diff
 ```
 
 ## Architecture

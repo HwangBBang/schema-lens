@@ -37,14 +37,18 @@
     S.mode = mode;
     $('erdwrap').style.display = mode === 'erd' ? 'block' : 'none';
     $('focuswrap').style.display = mode === 'focus' ? 'block' : 'none';
+    $('cmpwrap').style.display = mode === 'diff' ? 'flex' : 'none';
     $('m-erd').setAttribute('aria-pressed', mode === 'erd');
     $('m-focus').setAttribute('aria-pressed', mode === 'focus');
+    $('m-diff').setAttribute('aria-pressed', mode === 'diff');
     $('crumb').hidden = mode !== 'focus';
     if (mode === 'focus') {
       if (!S.focusTable) S.focusTable = defaultFocusTable();
       await Focus.render(S.focusTable);
       S.lastFocus = S.focusTable;
       syncCrumb();
+    } else if (mode === 'diff') {
+      await Compare.render(); // 기준본을 못 읽으면 화면 안에서 이유를 보여주고 끝난다
     } else {
       ERD.fitIfPending(); // 포커스 모드 중 미뤄둔 fit 실행
       // 포커스에서 복귀하면 보던 테이블을 ERD에서도 선택·센터링 — 왕복 컨텍스트 유지
@@ -295,7 +299,7 @@
   }
 
   // ── 모델 수신 ──
-  async function onModel({ model, path, focus, theme, side, layout, peek, impact, error }) {
+  async function onModel({ model, path, focus, theme, side, layout, peek, impact, diff: wantDiff, error }) {
     if (theme === 'light' || theme === 'dark')
       document.documentElement.setAttribute('data-theme', theme);
     if (side === 'open' || side === 'closed')
@@ -343,6 +347,7 @@
       else console.warn(`--focus ${focus}: 테이블이 없어 무시`);
     }
     if (impact) S.impact = true; // CLI --impact — setMode 전 주입 (main에서 --focus 필수 검증)
+    if (wantDiff) S.mode = 'diff'; // CLI --diff
 
     hideWelcome();
     $('welcome-err').hidden = true;
@@ -355,6 +360,7 @@
 
     buildSidebar(); buildLegend();
     Focus.init(model, S.sem, S, { go, tooltip, back: () => { if (S.hist.length) $('back').click(); } });
+    Compare.init(S);
     await ERD.load(model, S.sem, S);
     if (layout) await ERD.arrange(layout); // CLI --layout — arrange와 동일하게 저장까지 수행
     syncArrange(); // 파일별로 저장된 정렬 방식 복원 반영
@@ -385,6 +391,7 @@
 
   // ── 툴바 ──
   $('m-erd').addEventListener('click', () => setMode('erd'));
+  $('m-diff').addEventListener('click', () => setMode('diff'));
   $('m-focus').addEventListener('click', () => {
     // ERD에서 선택해 둔 테이블이 있으면 그 테이블로 포커스 진입
     if (S.mode === 'erd' && tableExists(S.selected)) go(S.selected);
@@ -470,6 +477,11 @@
     if (e.key === 'Escape' && !$('schema-menu').hidden) { closeSchemaMenu(); return; }
     if (e.key === 'Escape' && welcomeVisible() && S.model) { hideWelcome(); return; }
     if (welcomeVisible()) return; // 라이브러리/추출 화면에선 캔버스 단축키 비활성
+    if (S.mode === 'diff') { // 비교 화면은 읽기 전용 — 맞춤과 빠져나오기만 둔다
+      if (e.key === '0') Compare.fit();
+      if (e.key === 'Escape') setMode('erd');
+      return;
+    }
     if (S.mode === 'focus' && Focus.onKey(e)) return; // 포커스 모드 항법 우선 위임
     if (e.key === '0') ERD.fit();
     if (e.key === 'Escape') {
