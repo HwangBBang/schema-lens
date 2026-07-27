@@ -39,6 +39,7 @@
       <div class="seg" role="group" aria-label="보기 모드">
         <button id="m-erd" aria-pressed="true" title="전체 관계도">전체 ERD</button>
         <button id="m-focus" aria-pressed="false" title="1-테이블 포커스 탐색">포커스</button>
+        <button id="m-diff" aria-pressed="false" title="마지막 커밋과 나란히 비교">변경 비교</button>
       </div>
       <div class="seg" role="group" aria-label="관계 필터">
         <button id="f-all" aria-pressed="true">전체</button>
@@ -72,6 +73,18 @@
     <main class="stage-panel">
     <div class="stagewrap">
       <div id="errbar" hidden><b>파싱 오류</b><span id="errbar-msg"></span></div>
+      <div id="cmpwrap">
+        <div class="cmp-head">
+          <div class="cmp-lab left"><span class="tag">마지막 커밋</span><span id="cmp-lft"></span></div>
+          <div class="cmp-sum" id="cmp-sum"></div>
+          <div class="cmp-lab right"><span class="tag">지금 파일</span></div>
+        </div>
+        <div class="cmp-body" id="cmp-body">
+          <div class="cmp-pane"><svg id="cmp-l"></svg></div>
+          <div class="cmp-pane"><svg id="cmp-r"></svg></div>
+        </div>
+        <div class="cmp-empty" id="cmp-empty" hidden></div>
+      </div>
       <div id="erdwrap"><svg id="erd"></svg><svg id="minimap" aria-hidden="true"></svg>
         <div class="arrange" id="arrange" role="group" aria-label="정렬 방식">
           <span class="ar-lab">정렬</span>
@@ -170,7 +183,9 @@
 
 <script src="../node_modules/elkjs/lib/elk.bundled.js"></script>
 <script src="../src/semantics.js"></script>
+<script src="../src/diff.js"></script>
 <script src="erd.js"></script>
+<script src="compare.js"></script>
 <script src="focus.js"></script>
 <script src="app.js"></script>
 </body>

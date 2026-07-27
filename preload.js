@@ -13,4 +13,5 @@ contextBridge.exposeInMainWorld('dbv', {
   extractConvert: (sql, dialect) => ipcRenderer.invoke('extract-convert', { sql, dialect }),
   extractSave: (dbml) => ipcRenderer.invoke('extract-save', dbml),
   openSqlDialog: () => ipcRenderer.invoke('open-sql-dialog'),
+  gitBaseline: () => ipcRenderer.invoke('git-baseline'),
 });

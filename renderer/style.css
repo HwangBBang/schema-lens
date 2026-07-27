@@ -11,6 +11,7 @@
   --danger-border:color-mix(in srgb,var(--danger) 40%,var(--line));
   --real:#1658ea; --logical:#5d6776;
   --act-cascade:#b3261e; --act-setnull:#955716; --act-restrict:#5d6776;
+  --diff-add:#17753a; --diff-del:#b3261e; --diff-chg:#955716;
   --pk:#885e11; --pk-bg:rgba(136,94,17,.14);
   --uq:#7a36ed; --uq-bg:rgba(124,58,237,.13);
   --tint-chip:16%; /* 자기색 칩 배경 틴트 — 대비 검증과 연동, 임의 변경 금지 */
@@ -34,6 +35,7 @@
   --danger:#ff8b7d;
   --real:#5f92ff; --logical:#8895a6;
   --act-cascade:#ff8b7d; --act-setnull:#e0872b; --act-restrict:#8895a6;
+  --diff-add:#22ab55; --diff-del:#ff8b7d; --diff-chg:#e0872b;
   --pk:#e0b34a; --pk-bg:rgba(224,179,74,.10);
   --uq:#b596ff; --uq-bg:rgba(181,150,255,.10);
   --tint-chip:10%; /* 다크는 틴트가 배경을 밝혀 대비를 깎으므로 더 옅게 */
@@ -146,6 +148,8 @@ aside.side{position:relative}
   padding:0 10px;height:24px;cursor:pointer;white-space:nowrap}
 .seg button:hover:not([aria-pressed="true"]){color:var(--ink)}
 .seg button[aria-pressed="true"]{background:var(--primary);color:var(--on-primary);font-weight:600}
+.seg button:disabled{opacity:.38;cursor:default}
+.seg button:disabled:hover{color:var(--muted-s)}
 .crumb{display:flex;align-items:center;gap:8px;padding-left:10px;border-left:1px solid var(--line);
   min-width:0;overflow:hidden}
 .crumb .now{font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--ink);flex:0 1 auto;
@@ -159,6 +163,46 @@ aside.side{position:relative}
   border:1px solid var(--line);border-radius:20px;padding:3px 10px;white-space:nowrap}
 
 .stagewrap{flex:1 1 auto;position:relative;min-width:0;min-height:0;background:var(--panel)}
+
+/* ── 변경 비교 — 좌우 두 캔버스, 배치·확대·이동은 공유 ── */
+#cmpwrap{position:absolute;inset:0;display:none;flex-direction:column;overflow:hidden;background:var(--surface)}
+.cmp-head{display:flex;align-items:center;gap:14px;padding:7px 14px;font-size:11.5px;
+  border-bottom:1px solid var(--line);background:var(--panel)}
+.cmp-lab{flex:1 1 0;min-width:0;display:flex;align-items:center;gap:7px;color:var(--muted-s);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmp-lab.right{justify-content:flex-end}
+.cmp-lab .tag{font-weight:700;color:var(--ink)}
+.cmp-sum{display:flex;align-items:center;gap:6px;color:var(--muted-s);white-space:nowrap}
+.cmp-sum .sep{opacity:.4}
+.d-add{color:var(--diff-add)} .d-del{color:var(--diff-del)} .d-chg{color:var(--diff-chg)}
+.cmp-body{flex:1 1 auto;display:flex;min-height:0}
+.cmp-pane{flex:1 1 0;min-width:0;position:relative;overflow:hidden}
+.cmp-pane+.cmp-pane{border-left:1px solid var(--line)}
+.cmp-pane svg{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+.cmp-empty{flex:1 1 auto;display:flex;align-items:center;justify-content:center;
+  padding:24px;text-align:center;color:var(--muted-s);font-size:13px}
+
+.cnode .cbox{fill:var(--card);stroke:var(--line);stroke-width:1}
+.cnode .chdr,.cnode .chdr-b{fill:var(--card-2)}
+.cnode .cname{font-family:var(--mono);font-size:11px;font-weight:700;fill:var(--ink)}
+.cnode .crow{font-family:var(--mono);font-size:10px;fill:var(--ink-2)}
+.cnode .ctype{font-family:var(--mono);font-size:9px;fill:var(--faint)}
+.cnode .cmore{font-size:9px;fill:var(--faint);font-style:italic}
+.cnode.s-added .cbox{stroke:var(--diff-add);stroke-width:2}
+.cnode.s-added .chdr,.cnode.s-added .chdr-b{fill:color-mix(in srgb,var(--diff-add) var(--tint-chip),var(--card))}
+.cnode.s-removed{opacity:.9}
+.cnode.s-removed .cbox{stroke:var(--diff-del);stroke-width:2;stroke-dasharray:5 3}
+.cnode.s-removed .chdr,.cnode.s-removed .chdr-b{fill:color-mix(in srgb,var(--diff-del) var(--tint-chip),var(--card))}
+.cnode.s-changed .cbox{stroke:var(--diff-chg);stroke-width:2}
+.cnode.s-changed .chdr,.cnode.s-changed .chdr-b{fill:color-mix(in srgb,var(--diff-chg) var(--tint-chip),var(--card))}
+.crow.c-added{fill:var(--diff-add);font-weight:700}
+.crow.c-removed{fill:var(--diff-del);text-decoration:line-through}
+.crow.c-changed{fill:var(--diff-chg);font-weight:700}
+.cedge{fill:none;stroke:var(--edge);stroke-width:1.4;opacity:.75}
+.cedge.logical{stroke-dasharray:4 3}
+.cedge.e-added{stroke:var(--diff-add);stroke-width:2.2;opacity:1}
+.cedge.e-removed{stroke:var(--diff-del);stroke-width:2.2;opacity:1}
+.cedge.e-changed{stroke:var(--diff-chg);stroke-width:2.2;opacity:1}
 
 /* ── ERD canvas — dbdiagram 문법: 평평한 근백색 서페이스, 색은 카드 헤더가 담당 ── */
 #erdwrap{position:absolute;inset:0;overflow:hidden;background:var(--surface)}
