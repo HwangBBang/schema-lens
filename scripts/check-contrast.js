@@ -68,6 +68,10 @@ function run(theme, vars) {
     pairs.push([`t-${t}/card`, solid(`--t-${t}`), solid('--card')]);
     pairs.push([`t-${t}/tint+card`, solid(`--t-${t}`), selfTint(`--t-${t}`)]);
   }
+  for (const a of ['cascade', 'setnull', 'restrict']) {
+    pairs.push([`act-${a}/card`, solid(`--act-${a}`), solid('--card')]);            // 아웃라인 칩 텍스트
+    pairs.push([`act-${a}/tint+card`, solid(`--act-${a}`), selfTint(`--act-${a}`)]); // 틴트 채움 칩
+  }
   pairs.push(['real/tint+card', solid('--real'), selfTint('--real')]);
   pairs.push(['logical/tint+card', solid('--logical'), selfTint('--logical')]);
   pairs.push(['uq/uq-bg+card', solid('--uq'), tinted('--uq-bg', '--card')]);

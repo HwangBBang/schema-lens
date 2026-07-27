@@ -14,6 +14,7 @@
     filter: 'all', colsMode: 'keys',
     hubShown: {}, selected: null,
     groupColor: {},
+    impact: false, // 삭제 영향 모드 — go() 이동에도 유지, 파일 교체 시 리셋
   };
   let firstRenderDone = false;
   const tableExists = (n) => !!n && !!S.model && S.model.tables.some((t) => t.name === n);
@@ -30,8 +31,8 @@
     hide() { ttEl.style.display = 'none'; },
   };
 
-  // ── 모드 전환 ──
-  function setMode(mode) {
+  // ── 모드 전환 ── (포커스 렌더 완료를 promise로 전파 — CLI 캡처 계약)
+  async function setMode(mode) {
     const prev = S.mode;
     S.mode = mode;
     $('erdwrap').style.display = mode === 'erd' ? 'block' : 'none';
@@ -41,7 +42,7 @@
     $('crumb').hidden = mode !== 'focus';
     if (mode === 'focus') {
       if (!S.focusTable) S.focusTable = defaultFocusTable();
-      Focus.render(S.focusTable);
+      await Focus.render(S.focusTable);
       S.lastFocus = S.focusTable;
       syncCrumb();
     } else {
@@ -294,7 +295,7 @@
   }
 
   // ── 모델 수신 ──
-  async function onModel({ model, path, focus, theme, side, layout, error }) {
+  async function onModel({ model, path, focus, theme, side, layout, peek, impact, error }) {
     if (theme === 'light' || theme === 'dark')
       document.documentElement.setAttribute('data-theme', theme);
     if (side === 'open' || side === 'closed')
@@ -323,6 +324,7 @@
     model.groups.forEach((g, i) => { S.groupColor[g.name] = '--gc-' + (i % 10); });
     if (!keepFile) {
       S.hubShown = {}; S.selected = null; S.hist = []; S.focusTable = null; S.lastFocus = null;
+      S.impact = false;
       $('back').disabled = true;
       S.sem.hubs.forEach((h) => { S.hubShown[h.table] = false; });
     } else {
@@ -340,6 +342,7 @@
       if (model.tables.some((t) => t.name === focus)) { S.focusTable = focus; S.mode = 'focus'; }
       else console.warn(`--focus ${focus}: 테이블이 없어 무시`);
     }
+    if (impact) S.impact = true; // CLI --impact — setMode 전 주입 (main에서 --focus 필수 검증)
 
     hideWelcome();
     $('welcome-err').hidden = true;
@@ -351,11 +354,22 @@
     $('stat-chip').hidden = false;
 
     buildSidebar(); buildLegend();
-    Focus.init(model, S.sem, S, { go, tooltip });
+    Focus.init(model, S.sem, S, { go, tooltip, back: () => { if (S.hist.length) $('back').click(); } });
     await ERD.load(model, S.sem, S);
     if (layout) await ERD.arrange(layout); // CLI --layout — arrange와 동일하게 저장까지 수행
     syncArrange(); // 파일별로 저장된 정렬 방식 복원 반영
-    setMode(S.mode); // focus 모드면 여기서 렌더까지 수행
+    await setMode(S.mode); // focus 모드면 여기서 렌더 완료까지 대기
+    // CLI --peek: 렌더 완료 후 대상 카드의 .fx를 연다. 이웃이 아니면 즉시 실패(fail-fast).
+    if (peek && S.mode === 'focus') {
+      if (!Focus.openPeek(peek)) {
+        console.error(`--peek ${peek}: 현재 포커스(${S.focusTable})의 이웃이 아님`);
+        if (!firstRenderDone) {
+          firstRenderDone = true;
+          requestAnimationFrame(() => requestAnimationFrame(() => window.dbv.renderDone({ error: true })));
+        }
+        return;
+      }
+    }
     if (!firstRenderDone) {
       firstRenderDone = true;
       requestAnimationFrame(() => requestAnimationFrame(() => window.dbv.renderDone()));
@@ -450,12 +464,13 @@
       i.classList.toggle('hide', !!v && !i.dataset.name.toLowerCase().includes(v)));
   });
 
-  // ── 키보드 ──
+  // ── 키보드 ── (editable 판정은 Focus와 같은 술어 공유 — 계층 간 키 누출 방지)
   document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (Focus.isEditableTarget(e.target)) return; // 공유 술어(input/textarea/contenteditable)
     if (e.key === 'Escape' && !$('schema-menu').hidden) { closeSchemaMenu(); return; }
     if (e.key === 'Escape' && welcomeVisible() && S.model) { hideWelcome(); return; }
     if (welcomeVisible()) return; // 라이브러리/추출 화면에선 캔버스 단축키 비활성
+    if (S.mode === 'focus' && Focus.onKey(e)) return; // 포커스 모드 항법 우선 위임
     if (e.key === '0') ERD.fit();
     if (e.key === 'Escape') {
       if (S.mode === 'erd') { S.selected = null; ERD.select(null); syncSidebarActive(); }

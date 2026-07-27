@@ -199,6 +199,174 @@ check("'constructor' 테이블명 무해", (() => {
   return s.tableMeta['constructor'] && s.tableMeta['constructor'].junction === null;
 })());
 
+// ---- 삭제 영향: 액션 정규화(actionOf) · ACTIONS 계약 ----
+const t = (fn) => { try { return fn(); } catch (e) { return false; } };
+const ao = Semantics.actionOf;
+
+check('actionOf export', typeof ao === 'function');
+check('ACTIONS 6종 계약(label·cssVar)', t(() =>
+  ['cascade', 'set null', 'set default', 'restrict', 'no action', 'unknown']
+    .every((k) => Semantics.ACTIONS[k] && Semantics.ACTIONS[k].label && Semantics.ACTIONS[k].cssVar)));
+check('actionOf cascade', t(() => { const a = ao('cascade'); return a.action === 'cascade' && a.specified === true; }));
+check('actionOf 대소문자·공백 변형 흡수', t(() =>
+  ao(' CASCADE ').action === 'cascade' && ao('Set  Null').action === 'set null' &&
+  ao('SET DEFAULT').action === 'set default' && ao('Restrict').action === 'restrict'));
+check('actionOf 미지정 → no action + specified:false', t(() => {
+  const a = ao(null), b = ao(undefined);
+  return a.action === 'no action' && a.specified === false && b.specified === false;
+}));
+check('actionOf 명시 no action → specified:true', t(() => {
+  const a = ao('no action');
+  return a.action === 'no action' && a.specified === true;
+}));
+check('actionOf 미지 문자열 → unknown + 원문 보존', t(() => {
+  const a = ao('do weird');
+  return a.action === 'unknown' && a.raw === 'do weird';
+}));
+
+check('refMeta에 onDelete/onUpdate 정규화 포함', t(() => {
+  const mo = parseDbml(`Table p { id int [pk] }
+Table c { id int [pk]\n p_id int }
+Ref: c.p_id > p.id [delete: cascade]`);
+  const s = Semantics.analyze(mo);
+  const r = mo.refs[0];
+  return s.refMeta[r.id].onDelete.action === 'cascade' && s.refMeta[r.id].onUpdate.specified === false;
+}));
+
+// ---- 삭제 영향(deleteImpact) 인라인 픽스처 ----
+const di = (dbml, root) => Semantics.deleteImpact(parseDbml(dbml), root);
+const flatten = (entries) => {
+  const out = [];
+  (function walk(list) { for (const e of list || []) { out.push(e); walk(e.children); } })(entries);
+  return out;
+};
+
+// A. cascade 2단 전파 + set null 정지(하류 미방문)
+const fxA = `Table users { id int [pk] }
+Table posts { id int [pk]\n user_id int }
+Table post_likes { id int [pk]\n post_id int }
+Table drafts { id int [pk]\n user_id int }
+Table draft_notes { id int [pk]\n draft_id int }
+Ref: posts.user_id > users.id [delete: cascade]
+Ref: post_likes.post_id > posts.id [delete: cascade]
+Ref: drafts.user_id > users.id [delete: set null]
+Ref: draft_notes.draft_id > drafts.id [delete: cascade]`;
+check('impact: cascade 2단 전파', t(() => {
+  const r = di(fxA, 'users');
+  return r.summary.guaranteed.cascade.includes('posts') && r.summary.guaranteed.cascade.includes('post_likes');
+}));
+check('impact: post_likes는 depth 2', t(() =>
+  flatten(di(fxA, 'users').entries).some((e) => e.table === 'post_likes' && e.depth === 2)));
+check('impact: set null은 종단(행 생존)', t(() =>
+  di(fxA, 'users').summary.guaranteed.setNull.includes('drafts')));
+check('impact: set null 하류(draft_notes)는 미방문', t(() =>
+  !flatten(di(fxA, 'users').entries).some((e) => e.table === 'draft_notes')));
+
+// B. 거부권 수집 — NOT NULL set null / restrict / 미지정
+const fxB = `Table users { id int [pk] }
+Table a { id int [pk]\n user_id int [not null] }
+Table b { id int [pk]\n user_id int }
+Table c { id int [pk]\n user_id int }
+Ref: a.user_id > users.id [delete: set null]
+Ref: b.user_id > users.id [delete: restrict]
+Ref: c.user_id > users.id`;
+check('impact: NOT NULL 컬럼의 set null은 거부권', t(() =>
+  di(fxB, 'users').vetoed.some((v) => v.table === 'a')));
+check('impact: restrict는 거부권', t(() =>
+  di(fxB, 'users').vetoed.some((v) => v.table === 'b')));
+check('impact: 미지정은 거부권 + specified:false 구분', t(() => {
+  const r = di(fxB, 'users');
+  const e = flatten(r.entries).find((x) => x.table === 'c');
+  return r.vetoed.some((v) => v.table === 'c') && e && e.specified === false;
+}));
+check('impact: 명시 restrict는 specified:true', t(() => {
+  const e = flatten(di(fxB, 'users').entries).find((x) => x.table === 'b');
+  return e && e.specified === true;
+}));
+
+// C. set default — default 부재 시에만 경고, 거부권 아님
+const fxC = `Table users { id int [pk] }
+Table d { id int [pk]\n user_id int [default: 0] }
+Table e { id int [pk]\n user_id int }
+Ref: d.user_id > users.id [delete: set default]
+Ref: e.user_id > users.id [delete: set default]`;
+check('impact: set default(default 있음)는 경고 없음', t(() => {
+  const en = flatten(di(fxC, 'users').entries).find((x) => x.table === 'd');
+  return en && !en.warning;
+}));
+check('impact: set default(default 없음)는 경고, 거부권 아님', t(() => {
+  const r = di(fxC, 'users');
+  const en = flatten(r.entries).find((x) => x.table === 'e');
+  return en && !!en.warning && !r.vetoed.some((v) => v.table === 'e');
+}));
+
+// D. 다이아몬드 — set null로 선방문된 테이블이 cascade 경로로 재도달, 하위 restrict 거부권 누락 금지
+//    (전역 visited 구현이면 z의 restrict를 놓친다 — path-local stack 회귀 테스트)
+const fxD = `Table r { id int [pk] }
+Table x { id int [pk]\n r_id int\n y_id int }
+Table y { id int [pk]\n r_id int }
+Table z { id int [pk]\n x_id int }
+Ref: x.r_id > r.id [delete: set null]
+Ref: y.r_id > r.id [delete: cascade]
+Ref: x.y_id > y.id [delete: cascade]
+Ref: z.x_id > x.id [delete: restrict]`;
+check('impact: 다이아몬드에서 하위 restrict 거부권 수집', t(() =>
+  di(fxD, 'r').vetoed.some((v) => v.table === 'z')));
+check('impact: x는 setNull과 cascade 양쪽 집계(ref 단위)', t(() => {
+  const s = di(fxD, 'r').summary.guaranteed;
+  return s.setNull.includes('x') && s.cascade.includes('x');
+}));
+
+// E. 순환 — self-loop와 2노드 순환 모두 종료 + 재귀 표시
+check('impact: self-ref cascade 재귀 종료·표시', t(() => {
+  const r = di(`Table c { id int [pk]\n parent_id int }
+Ref: c.parent_id > c.id [delete: cascade]`, 'c');
+  return flatten(r.entries).some((e) => e.table === 'c' && e.cycle) &&
+    r.summary.guaranteed.cascade.includes('c');
+}));
+check('impact: 2노드 순환 종료', t(() => {
+  const r = di(`Table a { id int [pk]\n b_id int }
+Table b { id int [pk]\n a_id int }
+Ref: a.b_id > b.id [delete: cascade]
+Ref: b.a_id > a.id [delete: cascade]`, 'a');
+  return flatten(r.entries).some((e) => e.cycle);
+}));
+
+// F. 논리 관계 — 앱 레벨 격리 분기(guaranteed:false), 거부권 절대 불포함, 무표기는 고아
+const fxF = `Table users { id int [pk] }
+Table docs { id int [pk]\n user_id int }
+Table doc_files { id int [pk]\n doc_id int }
+Table notes { id int [pk]\n user_id int }
+Table pins { id int [pk]\n user_id int }
+Ref: docs.user_id > users.id [delete: cascade] // logical
+Ref: doc_files.doc_id > docs.id [delete: cascade]
+Ref: notes.user_id > users.id // logical
+Ref: pins.user_id > users.id [delete: restrict] // logical`;
+check('impact: 논리 cascade는 앱 레벨 분기', t(() => {
+  const r = di(fxF, 'users');
+  return r.summary.app.cascade.includes('docs') && !r.summary.guaranteed.cascade.includes('docs');
+}));
+check('impact: 앱 레벨 하류의 실FK도 guaranteed:false 전파', t(() => {
+  const e = flatten(di(fxF, 'users').entries).find((x) => x.table === 'doc_files');
+  return e && e.guaranteed === false && di(fxF, 'users').summary.app.cascade.includes('doc_files');
+}));
+check('impact: 논리 restrict는 거부권 불포함', t(() =>
+  !di(fxF, 'users').vetoed.some((v) => v.table === 'pins')));
+check('impact: 무표기 논리는 고아 가능', t(() =>
+  di(fxF, 'users').summary.app.orphan.includes('notes')));
+
+// G. 동일 child 다중 FK — ref 단위 보존 + 카테고리별 dedupe 집계
+const fxG = `Table users { id int [pk] }
+Table messages { id int [pk]\n sender_id int\n recipient_id int }
+Ref: messages.sender_id > users.id [delete: cascade]
+Ref: messages.recipient_id > users.id [delete: set null]`;
+check('impact: 동일 child 다중 FK는 엔트리 2건(ref 단위)', t(() =>
+  flatten(di(fxG, 'users').entries).filter((e) => e.table === 'messages').length === 2));
+check('impact: 요약은 카테고리별 테이블 dedupe', t(() => {
+  const s = di(fxG, 'users').summary.guaranteed;
+  return s.cascade.filter((x) => x === 'messages').length === 1 && s.setNull.includes('messages');
+}));
+
 // ---- SQL DDL → DBML 추출 (importer) 스모크 ----
 // 앱의 "SQL에서 추출"과 같은 경로: importer 변환 결과가 자체 파서·시맨틱까지 통과해야 한다.
 const { importer } = require('@dbml/core');
