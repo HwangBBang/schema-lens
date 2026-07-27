@@ -546,6 +546,62 @@ if (fs.existsSync(localPath)) {
   require(localPath)({ check, parseDbmlFile, Semantics });
 }
 
+// ---- 카드에 보여줄 컬럼 고르기(visibleCols) ----
+// 불변식: 바뀐 컬럼은 어떤 경우에도 접히지 않는다. 변경을 색으로 알리는 화면에서 정작 바뀐 줄이
+// 숨으면 "왜 이 테이블이 노랑인지" 알 길이 없다. 자리가 모자라면 키 컬럼부터 접는다.
+const { visibleCols } = require('../src/diff');
+const mkCols = (n, extra) => {
+  const cols = [];
+  for (let i = 1; i <= n; i++) cols.push({ name: `k${i}`, unique: true, pk: false });
+  for (const e of extra || []) cols.push(e);
+  return cols;
+};
+const tdOf = (map) => ({ cols: Object.fromEntries(Object.entries(map).map(([k, v]) => [k, { status: v }])) });
+
+check('visibleCols export', typeof visibleCols === 'function');
+
+check('바뀐 컬럼은 정원을 넘겨도 전부 살아남는다', t(() => {
+  const cols = mkCols(20, [{ name: 'zzz', unique: false, pk: false }]);
+  const v = visibleCols(cols, tdOf({ zzz: 'changed' }), { max: 12 });
+  return v.includes('zzz') && v.length <= 12;
+}));
+
+check('자리가 모자라면 키 컬럼부터 접힌다', t(() => {
+  const cols = mkCols(20);
+  const v = visibleCols(cols, tdOf({}), { max: 12 });
+  return v.length === 12 && v[0] === 'k1';
+}));
+
+check('바뀐 컬럼이 정원보다 많으면 키를 다 버리고 변경만 남긴다', t(() => {
+  const cols = mkCols(5, Array.from({ length: 15 }, (_, i) => ({ name: `c${i}`, unique: false, pk: false })));
+  const changed = {};
+  for (let i = 0; i < 15; i++) changed[`c${i}`] = 'changed';
+  const v = visibleCols(cols, tdOf(changed), { max: 12 });
+  return v.length === 15 && v.every((n) => n.startsWith('c'));
+}));
+
+check('전체 컬럼 모드면 전부 보여준다', t(() => {
+  const cols = mkCols(20);
+  return visibleCols(cols, tdOf({}), { max: 12, colsMode: 'all' }).length === 20;
+}));
+
+check('FK 컬럼도 키로 쳐서 보여준다', t(() => {
+  const cols = [{ name: 'a', pk: false, unique: false }, { name: 'ref_id', pk: false, unique: false }];
+  return visibleCols(cols, tdOf({}), { fkNames: new Set(['ref_id']) }).includes('ref_id');
+}));
+
+check('키도 변경도 없으면 앞쪽 몇 개라도 보여준다', t(() => {
+  const cols = [{ name: 'a' }, { name: 'b' }, { name: 'c' }, { name: 'd' }];
+  const v = visibleCols(cols, tdOf({}), {});
+  return v.length === 3 && v[0] === 'a';
+}));
+
+check('컬럼 순서는 원본을 따른다', t(() => {
+  const cols = [{ name: 'a', unique: true }, { name: 'b' }, { name: 'c', unique: true }];
+  const v = visibleCols(cols, tdOf({ b: 'changed' }), { max: 12 });
+  return v.join(',') === 'a,b,c';
+}));
+
 // ---- git 기준본 읽기 ----
 // 실제 저장소를 상대로 확인한다(모킹 없음). CI 체크아웃도 git 저장소라 그대로 돈다.
 // 비동기라 여기서부터 결과 출력까지를 한 블록으로 감싼다.

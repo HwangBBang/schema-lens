@@ -4,9 +4,9 @@ const path = require('path');
 const { parseDbml, parseDbmlFile } = require('./src/parse');
 const { gitBaseline } = require('./src/git-baseline');
 
-// CLI: electron . [file.dbml] [--screenshot out.png] [--focus table] [--theme light|dark] [--side open|closed] [--layout group|lr|tb|grid] [--peek table] [--impact] [--view library|extract] [--diff]
+// CLI: electron . [file.dbml] [--screenshot out.png] [--focus table] [--theme light|dark] [--side open|closed] [--layout group|lr|tb|grid] [--peek table] [--impact] [--view library|extract] [--diff] [--cols keys|all]
 const argv = process.argv.slice(app.isPackaged ? 1 : 2);
-const cli = { file: null, screenshot: null, focus: null, theme: null, side: null, layout: null, peek: null, impact: false, view: null, diff: false };
+const cli = { file: null, screenshot: null, focus: null, theme: null, side: null, layout: null, peek: null, impact: false, view: null, diff: false, cols: null };
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--screenshot') cli.screenshot = argv[++i];
   else if (argv[i] === '--focus') cli.focus = argv[++i];
@@ -17,6 +17,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === '--impact') cli.impact = true;
   else if (argv[i] === '--view') cli.view = argv[++i];
   else if (argv[i] === '--diff') cli.diff = true;
+  else if (argv[i] === '--cols') cli.cols = argv[++i];
   else if (!argv[i].startsWith('-')) cli.file = argv[i];
 }
 // --peek/--impact는 명시적 --focus 필수 — 역산 금지, 즉시 실패 (검증 스크린샷의 결정성)
@@ -67,8 +68,8 @@ function sendModel(filePath) {
     rememberFile(filePath);
     libTouch(filePath, { tables: model.tables.length, refs: model.refs.length });
     watchFile(filePath);
-    win.webContents.send('model', { model, path: filePath, focus: cli.focus, theme: cli.theme, side: cli.side, layout: cli.layout, peek: cli.peek, impact: cli.impact, diff: cli.diff, error: null });
-    cli.focus = null; cli.theme = null; cli.side = null; cli.layout = null; cli.peek = null; cli.impact = false; cli.diff = false; // 최초 1회만 적용 — 재파싱마다 리셋되지 않게
+    win.webContents.send('model', { model, path: filePath, focus: cli.focus, theme: cli.theme, side: cli.side, layout: cli.layout, peek: cli.peek, impact: cli.impact, cols: cli.cols, diff: cli.diff, error: null });
+    cli.focus = null; cli.theme = null; cli.side = null; cli.layout = null; cli.peek = null; cli.impact = false; cli.diff = false; cli.cols = null; // 최초 1회만 적용 — 재파싱마다 리셋되지 않게
     win.setTitle(`schema-lens — ${path.basename(filePath)}`);
     app.addRecentDocument(filePath);
   } catch (e) {

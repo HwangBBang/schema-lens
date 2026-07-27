@@ -17,10 +17,10 @@ window.Compare = (function () {
     for (const k in a || {}) e.setAttribute(k, a[k]);
     return e;
   };
-  const W = 208, HDR = 26, ROW = 17, PADB = 8, MAXROWS = 12;
+  const W = 208, HDR = 26, ROW = 17, PADB = 8, MAXROWS = 12, SELF_LOOP = 24;
 
   let S = null;
-  let diff = null, before = null, after = null;
+  let diff = null, before = null, after = null, baseline = null, okFlag = false;
   let pos = {}, edgePts = {};
   const tf = { x: 0, y: 0, k: 1 };
   let bounds = { w: 1, h: 1 };
@@ -37,21 +37,22 @@ window.Compare = (function () {
     }
     return m;
   }
-  function keepNames(model, name, fks) {
-    const t = (model.tables || []).find((x) => x.name === name);
-    if (!t) return null;
-    const td = diff.tables[name] || { cols: {} };
-    const fk = fks[name] || new Set();
-    const keep = t.cols.filter((c) =>
-      c.pk || c.unique || fk.has(c.name) || (td.cols[c.name] && td.cols[c.name].status !== 'same'));
-    return { table: t, names: (keep.length ? keep : t.cols.slice(0, 3)).map((c) => c.name) };
-  }
+  const tableOf = (model, name) => (model.tables || []).find((x) => x.name === name) || null;
   // 좌우가 같은 줄 구성을 갖도록 표시 컬럼을 합집합으로 맞춘다. 한쪽에서만 키였던 컬럼이
   // 반대쪽에서 접히면 같은 테이블인데 줄이 달라 보여, 정작 비교가 안 된다.
-  function rowsOf(k, pick) {
-    if (!k) return null;
-    const shown = k.table.cols.filter((c) => pick.has(c.name)).slice(0, MAXROWS);
-    return { table: k.table, shown, hidden: k.table.cols.length - shown.length };
+  // 어느 쪽을 보여줄지는 SchemaDiff.visibleCols가 정한다(바뀐 컬럼은 접지 않는다는 불변식 포함).
+  function pickFor(name, tb, ta, fkB, fkA) {
+    const td = diff.tables[name];
+    const opt = (fks) => ({ fkNames: fks[name] || new Set(), colsMode: S.colsMode, max: MAXROWS });
+    return new Set([
+      ...(tb ? SchemaDiff.visibleCols(tb.cols, td, opt(fkB)) : []),
+      ...(ta ? SchemaDiff.visibleCols(ta.cols, td, opt(fkA)) : []),
+    ]);
+  }
+  function rowsOf(t, pick) {
+    if (!t) return null;
+    const shown = t.cols.filter((c) => pick.has(c.name));
+    return { table: t, shown, hidden: t.cols.length - shown.length };
   }
 
   // ── 배치 ───────────────────────────────────────────────────
@@ -60,9 +61,9 @@ window.Compare = (function () {
     const names = new Set([...before.tables.map((t) => t.name), ...after.tables.map((t) => t.name)]);
     const rows = {}, size = {};
     for (const n of names) {
-      const kb = keepNames(before, n, fkB), ka = keepNames(after, n, fkA);
-      const pick = new Set([...(kb ? kb.names : []), ...(ka ? ka.names : [])]);
-      const b = rowsOf(kb, pick), a = rowsOf(ka, pick);
+      const tb = tableOf(before, n), ta = tableOf(after, n);
+      const pick = pickFor(n, tb, ta, fkB, fkA);
+      const b = rowsOf(tb, pick), a = rowsOf(ta, pick);
       rows[n] = { before: b, after: a };
       const lines = Math.max(b ? b.shown.length + (b.hidden > 0 ? 1 : 0) : 0,
                              a ? a.shown.length + (a.hidden > 0 ? 1 : 0) : 0);
@@ -98,6 +99,13 @@ window.Compare = (function () {
       pos[c.id] = { x: c.x, y: c.y, w: c.width, h: c.height };
       mx = Math.max(mx, c.x + c.width); my = Math.max(my, c.y + c.height);
     }
+    // 자기참조는 배치 엔진에 넘기지 않고 카드 오른쪽에 직접 고리로 그린다 — 그만큼 폭을 확보한다
+    for (const r of [...before.refs, ...after.refs]) {
+      if (r.self && pos[r.child.table]) {
+        const p = pos[r.child.table];
+        mx = Math.max(mx, p.x + p.w + SELF_LOOP + 4);
+      }
+    }
     for (const e of res.edges || []) {
       const s = (e.sections || [])[0];
       if (!s) continue;
@@ -121,6 +129,16 @@ window.Compare = (function () {
     }
     const last = pts[pts.length - 1];
     return d + `L${last.x},${last.y}`;
+  }
+
+  // 자기참조 고리 — 카드 오른쪽으로 나갔다 돌아온다. 배치 엔진은 자기 자신으로 가는 엣지의
+  // 경로를 주지 않으므로 여기서 직접 그린다(안 그리면 요약에만 잡히고 화면에서는 사라진다).
+  function selfPath(p) {
+    if (!p) return null;
+    const x = p.x + p.w, o = SELF_LOOP, r = 8;
+    const y1 = p.y + Math.round(p.h * 0.34), y2 = p.y + Math.round(p.h * 0.7);
+    return `M${x},${y1}L${x + o - r},${y1}Q${x + o},${y1} ${x + o},${y1 + r}` +
+      `L${x + o},${y2 - r}Q${x + o},${y2} ${x + o - r},${y2}L${x},${y2}`;
   }
 
   const REASON_LABEL = {
@@ -184,10 +202,11 @@ window.Compare = (function () {
     svg.appendChild(vp);
 
     for (const r of model.refs) {
-      const pts = edgePts[r.id];
-      if (!pts) continue;
+      if (S.filter === 'real' && r.kind === 'logical') continue; // 상단 "실 FK만" 반영
+      const d = r.self ? selfPath(pos[r.child.table]) : (edgePts[r.id] ? pathOf(edgePts[r.id]) : null);
+      if (!d) continue;
       const st = (diff.refs[r.id] || { status: 'same' }).status;
-      const p = el('path', { class: `cedge e-${st}${r.kind === 'logical' ? ' logical' : ''}`, d: pathOf(pts) });
+      const p = el('path', { class: `cedge e-${st}${r.kind === 'logical' ? ' logical' : ''}`, d });
       const tip = el('title');
       tip.textContent = st === 'added' ? `${r.id} — 새 관계`
         : st === 'removed' ? `${r.id} — 끊긴 관계`
@@ -259,9 +278,7 @@ window.Compare = (function () {
     return d0.toLocaleDateString('ko-KR');
   };
 
-  async function render() {
-    const r = await window.dbv.gitBaseline();
-    if (r.error) { showEmpty(r.message); return false; }
+  async function draw(r) {
     before = r.model; after = S.model;
     diff = SchemaDiff.diffModels(before, after);
 
@@ -290,5 +307,25 @@ window.Compare = (function () {
     return true;
   }
 
-  return { init, render, fit, hasDiff: () => !!diff };
+  async function render() {
+    const r = await window.dbv.gitBaseline();
+    okFlag = !r.error;
+    if (r.error) { baseline = null; showEmpty(r.message); return false; }
+    baseline = r;
+    return draw(r);
+  }
+
+  // 상단 토글(키만/전체 컬럼, 실 FK만)에 반응해 다시 그린다 — 기준본은 다시 읽지 않는다
+  async function redraw() { return baseline ? draw(baseline) : false; }
+
+  // 진입 버튼의 활성 여부를 미리 정한다. 눌러 들어가서야 이유를 아는 대신 버튼에서 알린다.
+  async function probe() {
+    const r = await window.dbv.gitBaseline();
+    const btn = $('m-diff');
+    btn.disabled = !!r.error;
+    btn.title = r.error ? `변경 비교 — ${r.message}` : '마지막 커밋과 나란히 비교';
+    return !r.error;
+  }
+
+  return { init, render, redraw, probe, fit, ok: () => okFlag };
 })();

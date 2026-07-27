@@ -299,11 +299,16 @@
   }
 
   // ── 모델 수신 ──
-  async function onModel({ model, path, focus, theme, side, layout, peek, impact, diff: wantDiff, error }) {
+  async function onModel({ model, path, focus, theme, side, layout, peek, impact, cols, diff: wantDiff, error }) {
     if (theme === 'light' || theme === 'dark')
       document.documentElement.setAttribute('data-theme', theme);
     if (side === 'open' || side === 'closed')
       applySide(side === 'open', false); // CLI 오버라이드 — 세션 한정, localStorage 미기록
+    if (cols === 'keys' || cols === 'all') { // CLI --cols — 아래 ERD.load/비교 렌더가 이 값을 읽는다
+      S.colsMode = cols;
+      $('c-keys').setAttribute('aria-pressed', cols === 'keys');
+      $('c-all').setAttribute('aria-pressed', cols === 'all');
+    }
     if (error) {
       if (S.model && S.filePath === path) {
         // 편집 중 일시적 문법 오류 — 기존 다이어그램을 유지하고 배너만 표시
@@ -361,6 +366,7 @@
     buildSidebar(); buildLegend();
     Focus.init(model, S.sem, S, { go, tooltip, back: () => { if (S.hist.length) $('back').click(); } });
     Compare.init(S);
+    await Compare.probe(); // 진입 버튼 활성 여부를 먼저 확정 — 캡처 시점의 화면이 매번 같아야 한다
     await ERD.load(model, S.sem, S);
     if (layout) await ERD.arrange(layout); // CLI --layout — arrange와 동일하게 저장까지 수행
     syncArrange(); // 파일별로 저장된 정렬 방식 복원 반영
@@ -375,6 +381,16 @@
         }
         return;
       }
+    }
+    // CLI --diff: 기준본을 못 읽었으면 안내 화면을 조용히 찍지 않고 실패로 알린다
+    // (--peek/--impact와 같은 규약 — 검증 자동화가 잘못된 경로에서 통과하면 안 된다)
+    if (wantDiff && !Compare.ok()) {
+      console.error('--diff: 마지막 커밋을 읽을 수 없어 비교할 수 없음');
+      if (!firstRenderDone) {
+        firstRenderDone = true;
+        requestAnimationFrame(() => requestAnimationFrame(() => window.dbv.renderDone({ error: true })));
+      }
+      return;
     }
     if (!firstRenderDone) {
       firstRenderDone = true;
@@ -403,6 +419,7 @@
     $('f-real').setAttribute('aria-pressed', f === 'real');
     ERD.applyFilter();
     if (S.mode === 'focus' && S.focusTable) { Focus.render(S.focusTable); syncCrumb(); }
+    if (S.mode === 'diff') Compare.redraw();
   };
   $('f-all').addEventListener('click', () => setFilter('all'));
   $('f-real').addEventListener('click', () => setFilter('real'));
@@ -412,6 +429,7 @@
     $('c-all').setAttribute('aria-pressed', m === 'all');
     if (S.model) await ERD.load(S.model, S.sem, S);
     if (S.mode === 'focus' && S.focusTable) Focus.render(S.focusTable); // 포커스 카드도 같은 규칙 적용
+    if (S.mode === 'diff') await Compare.redraw();                      // 비교 카드도 마찬가지
   };
   $('c-keys').addEventListener('click', () => setCols('keys'));
   $('c-all').addEventListener('click', () => setCols('all'));

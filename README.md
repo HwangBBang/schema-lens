@@ -165,8 +165,11 @@ code 1 otherwise):
   is hidden behind a collapsed "+N more" fold it is auto-expanded; if it is not a
   neighbor of the focused table at all, the run exits with code 2.
 
-`--diff` opens the compare view (last commit vs working copy). It needs no `--focus`; if the
-file is not in a git repository the captured screen states that instead.
+`--diff` opens the compare view (last commit vs working copy). It needs no `--focus`. If the
+baseline cannot be read (not a repository, file never committed) the run exits with code 2 —
+the same fail-fast rule as `--peek`, so a broken path never passes silently.
+
+`--cols keys|all` overrides the column-display toggle for that run, in either view.
 
 ```bash
 npx electron . assets/example.dbml --screenshot impact.png --focus repos --impact

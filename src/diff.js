@@ -112,5 +112,25 @@
     return { tables, refs, summary };
   }
 
-  return { diffModels };
+  // 카드에 보여줄 컬럼 이름을 원본 순서로 고른다.
+  //
+  // 불변식: 바뀐 컬럼은 어떤 경우에도 접히지 않는다. 변경을 색으로 알리는 화면에서 정작 바뀐
+  // 줄이 숨으면 테두리만 물든 채 이유를 알 수 없다. 자리가 모자라면 키 컬럼부터 접고, 변경이
+  // 정원보다 많으면 정원을 넘겨서라도 다 보여준다(그만큼 실제로 크게 바뀐 테이블이다).
+  function visibleCols(cols, tableDiff, opts) {
+    const o = opts || {};
+    const max = o.max == null ? 12 : o.max;
+    const fk = o.fkNames || new Set();
+    const list = cols || [];
+    if (o.colsMode === 'all') return list.map((c) => c.name);
+    const st = (n) => ((tableDiff && tableDiff.cols && tableDiff.cols[n]) || {}).status || 'same';
+    const changed = list.filter((c) => st(c.name) !== 'same').map((c) => c.name);
+    const keys = list.filter((c) => st(c.name) === 'same' && (c.pk || c.unique || fk.has(c.name)))
+      .map((c) => c.name);
+    const keep = new Set([...changed, ...keys.slice(0, Math.max(0, max - changed.length))]);
+    if (!keep.size) for (const c of list.slice(0, 3)) keep.add(c.name);
+    return list.filter((c) => keep.has(c.name)).map((c) => c.name);
+  }
+
+  return { diffModels, visibleCols };
 });
