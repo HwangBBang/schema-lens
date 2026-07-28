@@ -31,7 +31,7 @@ const node = {
 await Promise.all([
   build({
     ...common,
-    entryPoints: [p('renderer/app.js')],
+    entryPoints: [p('renderer/app.ts')],
     outfile: p('renderer/bundle.js'),
     format: 'iife',
     platform: 'browser',

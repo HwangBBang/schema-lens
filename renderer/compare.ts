@@ -9,7 +9,12 @@
 //
 // 관계선은 배치 엔진(elk)이 함께 내주는 꺾임점을 그대로 쓴다. 전체 ERD의 격자 우회 라우팅을
 // 복제하지 않으려는 선택이다(한쪽만 고쳐지는 사고를 막는다).
-window.Compare = (function () {
+import ELK from 'elkjs/lib/elk.bundled.js';
+import * as SchemaDiff from '../src/diff.ts';
+import { ERD } from './erd.ts';
+import type { AppState } from './types.ts';
+
+export const Compare = (function () {
   const $ = (id) => document.getElementById(id);
   const NS = 'http://www.w3.org/2000/svg';
   const el = (n, a) => {

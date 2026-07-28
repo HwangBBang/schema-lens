@@ -1,5 +1,9 @@
 // 포커스 모드: 레퍼런스 탐색기의 3열(피참조|포커스|참조) 뷰를 범용 모델로 이식.
-window.Focus = (() => {
+import * as Semantics from '../src/semantics.ts';
+import { ERD } from './erd.ts';
+import type { AppState } from './types.ts';
+
+export const Focus = (() => {
   const NS = 'http://www.w3.org/2000/svg';
   let model, sem, S, cb;   // cb: {go}
   let childrenEdges = {}, parentsEdges = {};

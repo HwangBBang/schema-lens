@@ -2,10 +2,12 @@
 //
 // 번들 진입점이다. 아래 import 순서 = 예전 index.html의 <script> 순서이고, 그 순서대로 평가된다.
 // 각 파일은 아직 전역(window.ERD 등)으로 서로를 찾는다 — 렌더러를 TypeScript로 옮길 때 정리한다.
-import './globals.js';
-import './erd.js';
-import './compare.js';
-import './focus.js';
+import * as Semantics from '../src/semantics.ts';
+import * as SchemaDiff from '../src/diff.ts';
+import { ERD } from './erd.ts';
+import { Focus } from './focus.ts';
+import { Compare } from './compare.ts';
+import type { AppState, ColsMode, Filter, Mode, ModelPayload } from './types.ts';
 
 (() => {
   // 기본 테마는 라이트. 사용자가 토글하면 localStorage로 유지, CLI --theme은 세션 한정 오버라이드.
