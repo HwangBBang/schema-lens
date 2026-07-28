@@ -42,6 +42,9 @@ export function columnFacts(model: Model, table: string, column: string): Column
     table,
     column: c,
     compositeUnique: t.uniqueIndexes.filter((ix) => ix.includes(column)),
+    // parse.ts는 테이블명과 달리 enum명은 스키마 접두를 붙이지 않고 원문 그대로 담는다 — 멀티스키마
+    // 파일에서 동명 enum이 여러 스키마에 있으면 먼저 찾힌 것과 잘못 매칭되거나, 스키마 접두가 붙은
+    // 타입 참조는 아예 매칭되지 않는다. 파서 쪽 한계이며 이 파일에서 고칠 범위가 아니다.
     enumDef: model.enums.find((e) => e.name === c.type) ?? null,
     fk,
   };

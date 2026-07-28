@@ -614,7 +614,7 @@ export const ERD = (() => {
     hit.addEventListener('pointermove', (ev) => CB().tooltip.move(ev.clientX, ev.clientY));
     hit.addEventListener('pointerleave', () => { g.classList.remove('hot'); CB().tooltip.hide(); });
   }
-  /** 관계 하나를 설명하는 칩 줄 — 관계선 툴팁, 컬럼 툴팁의 관계 블록, 허브 칩 툴팁이 함께 쓴다 */
+  /** 관계 하나를 설명하는 칩 줄 — 관계선 툴팁(edgeTooltipHtml)과 컬럼 툴팁의 관계 블록(fkBlockHtml)이 함께 쓴다 */
   function relChipsHtml(r: Ref, meta: RefMeta): string {
     const ty = SEM().TYPES[meta.type];
     return `<div class="tt-chips">` +
@@ -667,6 +667,8 @@ export const ERD = (() => {
 
   const HUB_TIP_MAX = 8;
 
+  // relChipsHtml을 그대로 쓰지 않는 이유: 그쪽은 칩을 <div class="tt-chips">로 감싸 줄바꿈하는데,
+  // 허브 행은 "자식컬럼 → 허브.부모컬럼" 텍스트 뒤에 칩을 같은 줄로 이어 붙여야 해서 마크업을 따로 짠다.
   function hubTooltipHtml(child: string, hub: string, refs: Ref[]): string {
     const rows = refs.slice(0, HUB_TIP_MAX).map((r) => {
       const meta = metaOf(r);
@@ -684,7 +686,12 @@ export const ERD = (() => {
       `<div class="tt-list">${rows}</div>${more}`;
   }
 
-  /** --tip 캡처 전용: 지연을 건너뛰고 대상 위에 툴팁을 고정한다. 대상이 화면에 없으면 false */
+  /**
+   * --tip/--tip-hub 캡처 전용: 지연을 건너뛰고 대상 위에 툴팁을 고정한다. 대상이 화면에 없으면 false.
+   * 호출하면 tipForced를 영구히 true로 잠가 이후 모든 tipArm/tipCancel을 무력화한다 — 되돌리는
+   * 수단이 없다. CLI는 매 실행이 새 프로세스라 문제없지만, 일반 UI 상호작용에 연결하면 그 세션 내내
+   * 모든 툴팁이 조용히 죽는다. UI 경로에서 부르지 말 것.
+   */
   function showTip(kind: 'col' | 'hub', table: string, key: string): boolean {
     const g = nodeEls[table];
     const t = MODEL().tables.find((x) => x.name === table);
@@ -745,6 +752,15 @@ export const ERD = (() => {
     if (tipTimer) { clearTimeout(tipTimer); tipTimer = 0; }
     if (tipShown) { tipShown = false; tipHiddenAt = performance.now(); }
     cb?.tooltip.hide(); // render() 중에는 cb가 없을 수 있다
+  }
+  // 뷰포트 조작(휠 팬·드래그 시작·키보드/검색으로 인한 이동)에서 쓰는 절제판 — 우리(컬럼/허브) 툴팁이
+  // 예약되었거나 표시 중일 때만 걷어낸다. hookEdge의 관계선 툴팁은 같은 #tooltip을 공유하지만
+  // 자기 pointerleave에서만 hide()를 부른다. 여기서 무조건 tipCancel()을 부르면, 두 손가락
+  // 스크롤(기본 팬 제스처) 중 관계선 위에 떠 있던 툴팁까지 꺼지고 pointermove는 move()만 불러
+  // 되살리지 못한다 — 그래서 우리 상태가 없을 땐 손대지 않는다.
+  function tipCancelViewport(): void {
+    if (!tipShown && !tipTimer) return;
+    tipCancel();
   }
 
   // ── 선택/하이라이트 ──────────────────────────────────────
@@ -856,6 +872,7 @@ export const ERD = (() => {
     return { x: x1 - 30, y: y1 - 50, w: x2 - x1 + 60, h: y2 - y1 + 80 };
   }
   function fit(): void {
+    tipCancelViewport(); // 화면 전체가 움직이므로 고정된 툴팁이 엉뚱한 자리에 떠 있으면 안 된다
     const b = contentBBox(), r = SVG().getBoundingClientRect();
     if (b.w <= 0) return;
     if (!r.width || !r.height) { pendingFit = true; return; } // 숨겨진 상태(포커스 모드)에서 scale 0 방지
@@ -867,6 +884,7 @@ export const ERD = (() => {
   function fitIfPending(): void { if (pendingFit) fit(); else updateMinimapView(); } // 숨김 중 리사이즈로 스테일해진 미니맵 뷰포트 보정
   function centerOn(name: string): void {
     const p = pos[name]; if (!p) return;
+    tipCancelViewport(); // 검색 등으로 다른 테이블로 점프 — 이전 위치에 고정된 툴팁을 남기지 않는다
     const r = SVG().getBoundingClientRect();
     tf.x = r.width / 2 - (p.x + p.w / 2) * tf.k;
     tf.y = r.height / 2 - (p.y + p.h / 2) * tf.k;
@@ -885,7 +903,7 @@ export const ERD = (() => {
   function hookViewport(): void {
     const sv = SVG();
     sv.addEventListener('wheel', (e) => {
-      tipCancel();
+      tipCancelViewport();
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) {
         const k2 = Math.min(2.5, Math.max(0.12, tf.k * Math.exp(-e.deltaY * 0.01)));
@@ -901,7 +919,7 @@ export const ERD = (() => {
     let drag: Drag | null = null;
     sv.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return; // 우클릭 드래그/선택 방지
-      tipCancel();
+      tipCancelViewport();
       tipSuppressed = true; // 드롭(pointerup)까지 새 툴팁 예약을 막는다
       const tgt = e.target instanceof Element ? e.target : null;
       const nodeG = tgt?.closest<SVGGElement>('.node') ?? null;
@@ -970,6 +988,16 @@ export const ERD = (() => {
       sv.classList.remove('panning');
       drag = null;
     });
+    // 미니맵(mountMinimap)과 같은 이유: OS 제스처 중단·창 포커스 이탈로 pointerup이 오지 않으면
+    // tipSuppressed가 true로 영구히 고착되어 세션 내내 툴팁이 뜨지 않는다. 드래그 상태도 pointerup과
+    // 같은 수준으로 정리하되(전체 재라우팅·저장 같은 "확정" 절차는 완결된 제스처가 아니므로 생략한다).
+    sv.addEventListener('pointercancel', () => {
+      tipSuppressed = false;
+      if (!drag) return;
+      fastPreview = false;
+      sv.classList.remove('panning');
+      drag = null;
+    });
     sv.addEventListener('dblclick', (e) => {
       const tgt = e.target instanceof Element ? e.target : null;
       const nodeG = tgt?.closest<SVGGElement>('.node') ?? null;
@@ -1003,7 +1031,7 @@ export const ERD = (() => {
       render(); fit(); applyFilter();
       if (ST().selected) select(ST().selected);
     },
-    showTip,
+    showTip, // CLI --tip/--tip-hub 전용 — 한 번 호출하면 tipForced가 영구히 잠기고 리셋 수단이 없다. UI에 연결 금지
     getLayoutMode: (): LayoutMode => layoutMode,
     hasCustomLayout: (): boolean => customLayout,
   };

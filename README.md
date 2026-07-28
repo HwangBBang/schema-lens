@@ -173,10 +173,11 @@ code 1 otherwise):
 baseline cannot be read (not a repository, file never committed) the run exits with code 2 —
 the same fail-fast rule as `--peek`, so a broken path never passes silently.
 
-`--tip TABLE.COLUMN` 과 `--tip-hub TABLE:HUB` 는 전체 ERD의 호버 툴팁을 띄운 상태로 캡처한다
-(호버는 다른 방법으로 재현할 수 없다). 두 플래그는 동시에 쓸 수 없고, 전체 ERD 화면에서만 동작한다.
-테이블명이 점을 포함할 수 있어 `--tip` 은 **마지막 점**에서 테이블과 컬럼을 나눈다.
-대상 컬럼이 "키만" 모드에서 접혀 있으면 코드 2로 종료하므로 `--cols all` 을 같이 준다.
+`--tip TABLE.COLUMN` and `--tip-hub TABLE:HUB` capture with a hover tooltip forced open
+(hover state can't be reproduced any other way). The two flags are mutually exclusive, and
+both only work in the full ERD view. Table names can contain dots, so `--tip` splits table
+and column at the **last** dot. If the target column is folded away under "키만" mode the
+run exits with code 2, so pass `--cols all` alongside it.
 
 `--cols keys|all` overrides the column-display toggle for that run, in either view.
 
