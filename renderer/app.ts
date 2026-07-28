@@ -37,7 +37,7 @@ const asEl = (t: EventTarget | null): Element | null => (t instanceof Element ? 
     impact: false, // 삭제 영향 모드 — go() 이동에도 유지, 파일 교체 시 리셋
   };
   let firstRenderDone = false;
-  const tableExists = (n: string | null): boolean => !!n && !!S.model && S.model.tables.some((t) => t.name === n);
+  const tableExists = (n: string | null): n is string => !!n && !!S.model && S.model.tables.some((t) => t.name === n);
 
   // ── 툴팁 ──
   const ttEl = $('tooltip');
@@ -450,7 +450,7 @@ const asEl = (t: EventTarget | null): Element | null => (t instanceof Element ? 
     S.colsMode = m;
     $('c-keys').setAttribute('aria-pressed', String(m === 'keys'));
     $('c-all').setAttribute('aria-pressed', String(m === 'all'));
-    if (S.model) await ERD.load(S.model, S.sem, S);
+    if (S.model) await ERD.load(S.model, S.sem!, S); // model과 sem은 354행에서 함께 채워진다
     if (S.mode === 'focus' && S.focusTable) Focus.render(S.focusTable); // 포커스 카드도 같은 규칙 적용
     if (S.mode === 'diff') await Compare.redraw();                      // 비교 카드도 마찬가지
   };
