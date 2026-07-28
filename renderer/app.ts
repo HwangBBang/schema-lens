@@ -321,7 +321,7 @@ const asEl = (t: EventTarget | null): Element | null => (t instanceof Element ? 
   }
 
   // ── 모델 수신 ──
-  async function onModel({ model, path, focus, theme, side, layout, peek, impact, cols, diff: wantDiff, error }: ModelPayload): Promise<void> {
+  async function onModel({ model, path, focus, theme, side, layout, peek, impact, cols, diff: wantDiff, tip, tipHub, error }: ModelPayload): Promise<void> {
     if (theme === 'light' || theme === 'dark')
       document.documentElement.setAttribute('data-theme', theme);
     if (side === 'open' || side === 'closed')
@@ -414,6 +414,28 @@ const asEl = (t: EventTarget | null): Element | null => (t instanceof Element ? 
         requestAnimationFrame(() => requestAnimationFrame(() => window.dbv.renderDone({ error: true })));
       }
       return;
+    }
+    // CLI --tip / --tip-hub: 전체 ERD에서 호버 툴팁을 강제로 띄운다.
+    // 호버는 스크린샷 CLI로 재현할 수 없어 렌더 검증 경로가 이것뿐이다.
+    // --peek/--diff와 같은 fail-fast — 대상이 없으면 조용히 다른 그림을 찍지 않는다.
+    const tipSpec = tip ?? tipHub;
+    if (tipSpec) {
+      const fail = (msg: string): void => {
+        console.error(msg);
+        if (!firstRenderDone) {
+          firstRenderDone = true;
+          requestAnimationFrame(() => requestAnimationFrame(() => window.dbv.renderDone({ error: true })));
+        }
+      };
+      if (S.mode !== 'erd') { fail(`--tip: 전체 ERD 화면에서만 쓸 수 있음 (현재 ${S.mode})`); return; }
+      // 테이블명 자체가 점을 포함할 수 있다(다중 스키마: sales.orders) — 마지막 점에서 자른다
+      const cut = tip ? tip.lastIndexOf('.') : tipSpec.indexOf(':');
+      if (cut <= 0) { fail(`--tip ${tipSpec}: TABLE.COLUMN 또는 TABLE:HUB 형식이어야 함`); return; }
+      const table = tipSpec.slice(0, cut), key = tipSpec.slice(cut + 1);
+      if (!ERD.showTip(tip ? 'col' : 'hub', table, key)) {
+        fail(`--tip ${tipSpec}: 대상이 화면에 없음 (컬럼이면 --cols all 필요할 수 있음)`);
+        return;
+      }
     }
     if (!firstRenderDone) {
       firstRenderDone = true;

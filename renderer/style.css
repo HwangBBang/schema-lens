@@ -278,6 +278,11 @@ svg.filter-real .edge.logical{display:none!important}
 #tooltip .ty{font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;color:var(--c);
   background:color-mix(in srgb,var(--c) var(--tint-chip),transparent)}
 #tooltip .kd{font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;color:var(--muted-s);border:1px solid var(--line)}
+#tooltip .tt-sub{font-size:11px;color:var(--muted-s);margin-top:3px;overflow-wrap:anywhere}
+#tooltip .tt-rel{margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
+#tooltip .tt-rel .tt-chips{margin-bottom:4px}
+#tooltip .tt-list{margin-top:5px;display:flex;flex-direction:column;gap:4px}
+#tooltip .tt-list > div{font-family:var(--mono);font-size:10.5px;color:var(--ink-2);overflow-wrap:anywhere}
 
 /* ── legend (플로팅 팝오버 — 툴바 ⓘ 버튼으로 토글) ── */
 .legend-pop{position:absolute;left:14px;bottom:14px;z-index:7;max-width:420px;

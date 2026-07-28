@@ -2,7 +2,9 @@
 // 허브(users 등) 유입 엣지는 기본 접힘 → 카드 하단 칩으로 축약, 선택/토글 시에만 표시.
 import ELK from 'elkjs/lib/elk.bundled.js';
 import type { ElkNode } from 'elkjs/lib/elk.bundled.js';
-import type { Model, Ref, Table } from '../src/model.ts';
+import type { Column, Model, Ref, Table } from '../src/model.ts';
+import { columnFacts } from '../src/column-facts.ts';
+import type { ColumnFk } from '../src/column-facts.ts';
 import type { Analysis, RefMeta } from '../src/semantics.ts';
 import type { AppState } from './types.ts';
 
@@ -231,7 +233,7 @@ export const ERD = (() => {
   }
 
   function render(): void {
-    if (cb && cb.tooltip) cb.tooltip.hide(); // 재렌더 시 툴팁 고착 방지
+    tipCancel(); // 재렌더 시 툴팁·예약 고착 방지
     grid = null; // 배치가 바뀌었을 수 있으므로 라우팅 격자 무효화
     const m = MODEL();
     SVG().innerHTML = '';
@@ -323,6 +325,13 @@ export const ERD = (() => {
         const ct = el('text', { class: 'ct', x: p.w - 9, y: cy + 3.5, 'text-anchor': 'end' }, g);
         ct.textContent = trunc(c.type, 13);
       }
+      // 행 전체를 덮는 투명 히트 — 드래그·더블클릭은 .node 위임이라 영향받지 않는다
+      const rowHit = el('rect', {
+        x: 0, y, width: p.w, height: ROW, fill: 'transparent', style: 'pointer-events:all',
+      }, g);
+      rowHit.dataset['tipCol'] = c.name; // showTip이 이 행을 다시 찾는 열쇠
+      rowHit.addEventListener('pointerenter', (ev: PointerEvent) => tipArm(colTooltipHtml(t, c), ev.clientX, ev.clientY));
+      rowHit.addEventListener('pointerleave', () => tipCancel());
       y += ROW;
     }
     if (hidden > 0) {
@@ -601,16 +610,106 @@ export const ERD = (() => {
     hit.addEventListener('pointermove', (ev) => CB().tooltip.move(ev.clientX, ev.clientY));
     hit.addEventListener('pointerleave', () => { g.classList.remove('hot'); CB().tooltip.hide(); });
   }
-  function edgeTooltipHtml(r: Ref, meta: RefMeta): string {
+  /** 관계 하나를 설명하는 칩 줄 — 관계선 툴팁, 컬럼 툴팁의 관계 블록, 허브 칩 툴팁이 함께 쓴다 */
+  function relChipsHtml(r: Ref, meta: RefMeta): string {
     const ty = SEM().TYPES[meta.type];
-    return `<div class="tt-head">${esc(r.child.table)}.${esc(r.child.cols.join(','))} → ${esc(r.parent.table)}.${esc(r.parent.cols.join(','))}</div>
-      <div class="tt-chips">
-        <span class="ty" style="--c:var(${ty.cssVar})">${ty.label}</span>
-        <span class="kd">${meta.card}</span>
-        <span class="kd">${r.kind === 'real' ? '실 DB FK' : '논리 FK'}</span>
-        ${r.onDelete ? `<span class="kd">on delete ${esc(r.onDelete)}</span>` : ''}
-      </div>
-      <b>${esc(meta.label)}</b> — ${esc(meta.sentence)}`;
+    return `<div class="tt-chips">` +
+      `<span class="ty" style="--c:var(${ty.cssVar})">${ty.label}</span>` +
+      `<span class="kd">${meta.card}</span>` +
+      `<span class="kd">${r.kind === 'real' ? '실 DB FK' : '논리 FK'}</span>` +
+      `${r.onDelete ? `<span class="kd">on delete ${esc(r.onDelete)}</span>` : ''}` +
+      `</div>`;
+  }
+
+  const ENUM_TIP_MAX = 12;
+
+  /** FK 컬럼일 때만 붙는 관계 블록. 복합 FK의 후행 멤버는 어느 관계의 일부인지만 알린다 */
+  function fkBlockHtml(f: ColumnFk): string {
+    const r = f.ref;
+    if (f.role === 'member') {
+      return `<div class="tt-rel"><div class="tt-sub">복합 FK (${r.child.cols.map(esc).join(', ')}) → ` +
+        `${esc(r.parent.table)}.(${r.parent.cols.map(esc).join(', ')})</div></div>`;
+    }
+    const meta = metaOf(r);
+    return `<div class="tt-rel">${relChipsHtml(r, meta)}<b>${esc(meta.label)}</b> — ${esc(meta.sentence)}</div>`;
+  }
+
+  function colTooltipHtml(t: Table, c: Column): string {
+    const head = `<div class="tt-head">${esc(t.name)}.${esc(c.name)}</div>`;
+    const f = columnFacts(MODEL(), t.name, c.name);
+    if (!f) return head; // 모델과 렌더가 어긋난 상태 — 이름만이라도 보여준다
+    const chips: string[] = [];
+    if (c.type) chips.push(`<span class="kd">${esc(c.type)}</span>`);
+    if (c.pk) chips.push('<span class="kd">PK</span>');
+    if (c.unique) chips.push('<span class="kd">UQ</span>');
+    // PK는 파서가 notNull을 강제로 켠다 — 같은 사실을 두 칩으로 반복하지 않는다
+    if (!c.pk) chips.push(`<span class="kd">${c.notNull ? 'NOT NULL' : 'NULL 허용'}</span>`);
+    if (c.dflt != null) chips.push(`<span class="kd">기본값 ${esc(c.dflt)}</span>`);
+
+    let h = head + `<div class="tt-chips">${chips.join('')}</div>`;
+    if (c.note) h += `<div class="tt-sub">${esc(c.note)}</div>`;
+    if (f.enumDef) {
+      const vs = f.enumDef.values.map((v) => v.name);
+      const head2 = vs.slice(0, ENUM_TIP_MAX).map(esc).join(' · ');
+      const more = vs.length > ENUM_TIP_MAX ? ` … 외 ${vs.length - ENUM_TIP_MAX}개` : '';
+      h += `<div class="tt-sub">허용 값: ${head2}${more}</div>`;
+    }
+    for (const ix of f.compositeUnique) {
+      h += `<div class="tt-sub">복합 UNIQUE (${ix.map(esc).join(', ')})</div>`;
+    }
+    if (f.fk) h += fkBlockHtml(f.fk);
+    return h;
+  }
+
+  /** --tip 캡처 전용: 지연을 건너뛰고 대상 위에 툴팁을 고정한다. 대상이 화면에 없으면 false */
+  function showTip(kind: 'col' | 'hub', table: string, key: string): boolean {
+    const g = nodeEls[table];
+    const t = MODEL().tables.find((x) => x.name === table);
+    if (!g || !t) return false;
+    if (kind !== 'col') return false; // 'hub'는 Task 3에서 연결한다
+    const hit = g.querySelector<SVGRectElement>(`rect[data-tip-col="${CSS.escape(key)}"]`);
+    const c = t.cols.find((x) => x.name === key);
+    if (!hit || !c) return false; // 컬럼이 접혀 있으면 히트 사각형 자체가 없다
+    const r = hit.getBoundingClientRect();
+    tipForced = true;
+    CB().tooltip.show(colTooltipHtml(t, c), r.left + r.width / 2, r.bottom);
+    return true;
+  }
+
+  function edgeTooltipHtml(r: Ref, meta: RefMeta): string {
+    return `<div class="tt-head">${esc(r.child.table)}.${esc(r.child.cols.join(','))} → ${esc(r.parent.table)}.${esc(r.parent.cols.join(','))}</div>` +
+      relChipsHtml(r, meta) +
+      `<b>${esc(meta.label)}</b> — ${esc(meta.sentence)}`;
+  }
+
+  // ── 지연 호버 툴팁 ──────────────────────────────────────
+  // 관계선(hookEdge)은 즉시 표시 + 마우스 추종으로 충분하다 — 선이 얇아 겨냥 자체가 의도다.
+  // 컬럼 행은 18px 간격으로 붙어 있어 같은 규칙을 쓰면 카드 위를 지나가기만 해도 툴팁이 튄다.
+  // 그래서 카드 안쪽 대상만 "지연 후 고정"을 따로 쓴다.
+  const TIP_DELAY = 300;      // 처음 뜰 때까지
+  const TIP_WARM_DELAY = 100; // 방금 툴팁을 보고 있었으면 짧게 — 컬럼을 훑을 때 매번 기다리지 않게
+  const TIP_WARM_MS = 400;
+  let tipTimer = 0;           // 0 = 예약 없음 (setTimeout은 1부터 반환한다)
+  let tipShown = false;
+  let tipHiddenAt = Number.NEGATIVE_INFINITY;
+  let tipForced = false;      // --tip/--tip-hub 캡처 모드 — 호버 경로가 툴팁을 건드리지 못하게 잠근다
+
+  function tipArm(html: string, x: number, y: number): void {
+    if (tipForced) return;
+    if (tipTimer) clearTimeout(tipTimer);
+    const warm = tipShown || performance.now() - tipHiddenAt < TIP_WARM_MS;
+    tipTimer = window.setTimeout(() => {
+      tipTimer = 0;
+      tipShown = true;
+      CB().tooltip.show(html, x, y); // 이후 move를 부르지 않는다 = 제자리 고정
+    }, warm ? TIP_WARM_DELAY : TIP_DELAY);
+  }
+
+  function tipCancel(): void {
+    if (tipForced) return;
+    if (tipTimer) { clearTimeout(tipTimer); tipTimer = 0; }
+    if (tipShown) { tipShown = false; tipHiddenAt = performance.now(); }
+    cb?.tooltip.hide(); // render() 중에는 cb가 없을 수 있다
   }
 
   // ── 선택/하이라이트 ──────────────────────────────────────
@@ -751,6 +850,7 @@ export const ERD = (() => {
   function hookViewport(): void {
     const sv = SVG();
     sv.addEventListener('wheel', (e) => {
+      tipCancel();
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) {
         const k2 = Math.min(2.5, Math.max(0.12, tf.k * Math.exp(-e.deltaY * 0.01)));
@@ -766,6 +866,7 @@ export const ERD = (() => {
     let drag: Drag | null = null;
     sv.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return; // 우클릭 드래그/선택 방지
+      tipCancel();
       const tgt = e.target instanceof Element ? e.target : null;
       const nodeG = tgt?.closest<SVGGElement>('.node') ?? null;
       const hullG = !nodeG ? tgt?.closest<SVGGElement>('.hullg') ?? null : null;
@@ -865,6 +966,7 @@ export const ERD = (() => {
       render(); fit(); applyFilter();
       if (ST().selected) select(ST().selected);
     },
+    showTip,
     getLayoutMode: (): LayoutMode => layoutMode,
     hasCustomLayout: (): boolean => customLayout,
   };
