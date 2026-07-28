@@ -1,4 +1,12 @@
 // 앱 셸: 상태, 사이드바, 툴바, 모드 전환(ERD/포커스), IPC, 드래그앤드롭.
+//
+// 번들 진입점이다. 아래 import 순서 = 예전 index.html의 <script> 순서이고, 그 순서대로 평가된다.
+// 각 파일은 아직 전역(window.ERD 등)으로 서로를 찾는다 — 렌더러를 TypeScript로 옮길 때 정리한다.
+import './globals.js';
+import './erd.js';
+import './compare.js';
+import './focus.js';
+
 (() => {
   // 기본 테마는 라이트. 사용자가 토글하면 localStorage로 유지, CLI --theme은 세션 한정 오버라이드.
   document.documentElement.setAttribute('data-theme',

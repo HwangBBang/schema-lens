@@ -5,6 +5,10 @@ node_modules/
 # 스크린샷 CLI 산출물
 out*.png
 
+# 빌드 산출물 — 소스는 renderer/*.js, 실행은 이 번들이 읽힌다
+renderer/bundle.js
+renderer/bundle.js.map
+
 # 로컬 전용 — 실무 스키마와 그 파생물·회귀 (저장소에 올리지 않음)
 assets/schema.dbml
 assets/schema-reconstruction.json

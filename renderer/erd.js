@@ -1,6 +1,6 @@
 // 전체 ERD 캔버스: elk 자동배치 + SVG 렌더 + 줌/팬 + 노드 드래그 + 관계 하이라이트.
 // 허브(users 등) 유입 엣지는 기본 접힘 → 카드 하단 칩으로 축약, 선택/토글 시에만 표시.
-const ERD = (() => {
+window.ERD = (() => {
   const NS = 'http://www.w3.org/2000/svg';
   const W = 232, HDR = 28, ROW = 18, CHIP = 20, PADB = 8;
 
