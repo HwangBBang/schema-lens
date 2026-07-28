@@ -346,8 +346,12 @@ export const ERD = (() => {
       const tx = el('text', { class: 'hubchip', x: 15, y: cy + 11.5 }, g);
       tx.textContent = trunc(`◦ ${L.hub} — ${labels}`, 32);
       const hit = el('rect', { x: 8, y: cy, width: p.w - 16, height: 16, fill: 'transparent', style: 'pointer-events:all;cursor:default' }, g);
-      hit.addEventListener('pointerenter', () => setHubHot(t.name, L.hub, true));
-      hit.addEventListener('pointerleave', () => setHubHot(t.name, L.hub, false));
+      hit.dataset['tipHub'] = L.hub; // showTip이 이 칩을 다시 찾는 열쇠
+      hit.addEventListener('pointerenter', (ev: PointerEvent) => {
+        setHubHot(t.name, L.hub, true);
+        tipArm(hubTooltipHtml(t.name, L.hub, L.refs), ev.clientX, ev.clientY);
+      });
+      hit.addEventListener('pointerleave', () => { setHubHot(t.name, L.hub, false); tipCancel(); });
       y += CHIP;
     }
     nodeEls[t.name] = g;
@@ -661,12 +665,39 @@ export const ERD = (() => {
     return h;
   }
 
+  const HUB_TIP_MAX = 8;
+
+  function hubTooltipHtml(child: string, hub: string, refs: Ref[]): string {
+    const rows = refs.slice(0, HUB_TIP_MAX).map((r) => {
+      const meta = metaOf(r);
+      const ty = SEM().TYPES[meta.type];
+      return `<div>${esc(r.child.cols.join(','))} → ${esc(hub)}.${esc(r.parent.cols.join(','))} ` +
+        `<span class="ty" style="--c:var(${ty.cssVar})">${ty.label}</span>` +
+        `<span class="kd">${meta.card}</span>` +
+        `<span class="kd">${r.kind === 'real' ? '실 DB FK' : '논리 FK'}</span>` +
+        `${r.onDelete ? `<span class="kd">on delete ${esc(r.onDelete)}</span>` : ''}</div>`;
+    }).join('');
+    const more = refs.length > HUB_TIP_MAX
+      ? `<div class="tt-sub">… 외 ${refs.length - HUB_TIP_MAX}개</div>` : '';
+    return `<div class="tt-head">${esc(child)} → ${esc(hub)}</div>` +
+      `<div class="tt-sub">접힌 관계 ${refs.length}개</div>` +
+      `<div class="tt-list">${rows}</div>${more}`;
+  }
+
   /** --tip 캡처 전용: 지연을 건너뛰고 대상 위에 툴팁을 고정한다. 대상이 화면에 없으면 false */
   function showTip(kind: 'col' | 'hub', table: string, key: string): boolean {
     const g = nodeEls[table];
     const t = MODEL().tables.find((x) => x.name === table);
     if (!g || !t) return false;
-    if (kind !== 'col') return false; // 'hub'는 Task 3에서 연결한다
+    if (kind === 'hub') {
+      const hit = g.querySelector<SVGRectElement>(`rect[data-tip-hub="${CSS.escape(key)}"]`);
+      const link = hubLinksFor(table).find((l) => l.hub === key);
+      if (!hit || !link) return false;
+      const r = hit.getBoundingClientRect();
+      tipForced = true;
+      CB().tooltip.show(hubTooltipHtml(table, key, link.refs), r.left + r.width / 2, r.bottom);
+      return true;
+    }
     const hit = g.querySelector<SVGRectElement>(`rect[data-tip-col="${CSS.escape(key)}"]`);
     const c = t.cols.find((x) => x.name === key);
     if (!hit || !c) return false; // 컬럼이 접혀 있으면 히트 사각형 자체가 없다
@@ -693,9 +724,13 @@ export const ERD = (() => {
   let tipShown = false;
   let tipHiddenAt = Number.NEGATIVE_INFINITY;
   let tipForced = false;      // --tip/--tip-hub 캡처 모드 — 호버 경로가 툴팁을 건드리지 못하게 잠근다
+  // 드래그(노드/그룹/팬) 도중엔 포인터 캡처와 무관하게 pointerenter/leave가 실제 좌표 기준으로 계속
+  // 발생한다 — 300ms 안에 드래그가 끝나지 않으면 지나친 다른 카드의 행에서 툴팁이 떴다가 드롭 전에
+  // 보이는 문제가 생긴다. hookViewport의 pointerdown/up과 짝을 맞춰 드래그 중엔 무조건 억제한다.
+  let tipSuppressed = false;
 
   function tipArm(html: string, x: number, y: number): void {
-    if (tipForced) return;
+    if (tipForced || tipSuppressed) return;
     if (tipTimer) clearTimeout(tipTimer);
     const warm = tipShown || performance.now() - tipHiddenAt < TIP_WARM_MS;
     tipTimer = window.setTimeout(() => {
@@ -867,6 +902,7 @@ export const ERD = (() => {
     sv.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return; // 우클릭 드래그/선택 방지
       tipCancel();
+      tipSuppressed = true; // 드롭(pointerup)까지 새 툴팁 예약을 막는다
       const tgt = e.target instanceof Element ? e.target : null;
       const nodeG = tgt?.closest<SVGGElement>('.node') ?? null;
       const hullG = !nodeG ? tgt?.closest<SVGGElement>('.hullg') ?? null : null;
@@ -922,6 +958,7 @@ export const ERD = (() => {
       }
     });
     sv.addEventListener('pointerup', () => {
+      tipSuppressed = false; // 드래그 종료 — 이후 호버는 다시 정상적으로 툴팁을 예약한다
       if (!drag) return;
       if (drag.type === 'node') {
         if (!drag.moved) { fastPreview = false; CB().onSelect(drag.name === ST().selected ? null : drag.name); }

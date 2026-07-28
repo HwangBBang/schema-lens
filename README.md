@@ -70,6 +70,9 @@ schema-lens addresses this in three ways:
 - Wheel = pan, `⌘`/`Ctrl` + wheel = zoom · drag tables, or drag a group hull to move the whole cluster
 - Layout edits persist per file (`View > Reset Layout` to discard)
 - Minimap with viewport indicator — click or drag it to jump
+- Hovering a column row or a folded-hub chip opens a detail tooltip after a short delay —
+  full column name and type, nullability, default, note, enum values, composite unique
+  membership, and the relationship behind an FK column
 
 **Focus mode**
 - Three-column view of a single table: referencing tables on the left (the N side),
@@ -150,7 +153,8 @@ Renders, captures, and exits without interaction — useful for visual regressio
 
 ```bash
 npx electron . <file> --screenshot out.png [--focus TABLE] [--theme light|dark] \
-  [--side open|closed] [--layout group|lr|tb|grid] [--impact] [--peek TABLE]
+  [--side open|closed] [--layout group|lr|tb|grid] [--impact] [--peek TABLE] \
+  [--tip TABLE.COLUMN] [--tip-hub TABLE:HUB]
 ```
 
 On parse failure it captures the error screen and exits with code 2. `--focus`,
@@ -168,6 +172,11 @@ code 1 otherwise):
 `--diff` opens the compare view (last commit vs working copy). It needs no `--focus`. If the
 baseline cannot be read (not a repository, file never committed) the run exits with code 2 —
 the same fail-fast rule as `--peek`, so a broken path never passes silently.
+
+`--tip TABLE.COLUMN` 과 `--tip-hub TABLE:HUB` 는 전체 ERD의 호버 툴팁을 띄운 상태로 캡처한다
+(호버는 다른 방법으로 재현할 수 없다). 두 플래그는 동시에 쓸 수 없고, 전체 ERD 화면에서만 동작한다.
+테이블명이 점을 포함할 수 있어 `--tip` 은 **마지막 점**에서 테이블과 컬럼을 나눈다.
+대상 컬럼이 "키만" 모드에서 접혀 있으면 코드 2로 종료하므로 `--cols all` 을 같이 준다.
 
 `--cols keys|all` overrides the column-display toggle for that run, in either view.
 
