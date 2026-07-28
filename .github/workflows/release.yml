@@ -29,6 +29,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run test:contrast
+      - run: npm run build # 렌더러 번들 — 저장소에 없으므로 패키징 전에 만들어야 한다
       # 미서명 배포 — identity:null 이라 서명·노터라이즈 단계 없음
       - run: npx electron-builder --mac --publish always
         env:

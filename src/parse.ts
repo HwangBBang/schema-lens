@@ -7,9 +7,32 @@
 // **트레일링 `//` 주석**에 단어 `logical`이 있으면 그 Ref를 논리 FK로 취급한다. 표기가 없으면 실 FK.
 // 주석 처리된 라인·블록 주석·note 문자열 속 텍스트는 수집하지 않는다.
 
-const fs = require('fs');
-const path = require('path');
-const { Parser } = require('@dbml/core');
+import fs from 'node:fs';
+import path from 'node:path';
+import { Parser } from '@dbml/core';
+
+import type { Endpoint, Model } from './model.ts';
+// @dbml/core가 돌려주는 구조 중 우리가 실제로 읽는 부분만 적는다.
+// 라이브러리가 내보내는 타입과 어긋나는 자리(예: Ref.note)가 있어, 경계에서 한 번만 좁혀 쓰고
+// 그 안쪽은 src/model.ts의 타입으로만 이야기한다.
+type RawField = {
+  name: string;
+  type?: { type_name?: string; args?: string } | null;
+  pk?: boolean; unique?: boolean; not_null?: boolean;
+  note?: unknown;
+  dbdefault?: { value?: unknown } | null;
+};
+type RawIndex = { columns?: { value?: string }[]; pk?: boolean; unique?: boolean };
+type RawTable = { name: string; note?: unknown; fields?: RawField[]; indexes?: RawIndex[] };
+type RawEndpoint = { schemaName?: string | null; tableName: string; fieldNames?: string[]; relation?: string };
+type RawRef = { endpoints?: RawEndpoint[]; onDelete?: string | null; onUpdate?: string | null; note?: unknown };
+type RawGroupMember = { schemaName?: string | null; tableName?: string; name?: string };
+type RawGroup = { name: string; tables?: RawGroupMember[] };
+type RawEnum = { name: string; values?: { name: string; note?: unknown }[] };
+type RawSchema = { name: string; tables?: RawTable[]; refs?: RawRef[]; tableGroups?: RawGroup[]; enums?: RawEnum[] };
+type RawDatabase = { name?: string | null; note?: unknown; databaseType?: string | null; schemas?: RawSchema[] };
+
+
 
 const NAME = '(?:"[^"]+"|\\w+)';
 const ENDPOINT = `((?:${NAME}\\.)+(?:\\([^)]+\\)|${NAME}))`;
@@ -17,10 +40,12 @@ const REF_RE = new RegExp(`${ENDPOINT}\\s*(<>|[<>-])\\s*${ENDPOINT}`);
 const INLINE_RE = new RegExp(`\\bref\\s*:\\s*(<>|[<>-])\\s*${ENDPOINT}`, 'i');
 const TABLE_RE = new RegExp(`^\\s*Table\\s+(${NAME}(?:\\.${NAME})?)(?:\\s+as\\s+(${NAME}))?`, 'i');
 
-const unq = (s) => s.replace(/^"|"$/g, '');
+// note 계열은 라이브러리에서 형태가 정해지지 않은 값으로 온다 — 문자열이 아니면 null로 눕힌다
+const noteOf = (v: unknown): string | null => (v == null || v === '' ? null : String(v));
+const unq = (s: string): string => s.replace(/^"|"$/g, '');
 
 // 라인을 (코드, 트레일링 주석)으로 분리 — 따옴표 문자열 안의 //는 무시
-function splitComment(line) {
+function splitComment(line: string): [string, string] {
   let inS = false, inD = false;
   for (let i = 0; i < line.length - 1; i++) {
     const ch = line[i];
@@ -35,9 +60,9 @@ function splitComment(line) {
 // 블록 주석·트리플쿼트 노트를 (라인수 유지하며) 공백화.
 // 상태 추적 스캐너 — 라인 주석 안의 "/*"(예: 경로 글롭 deploy/*.sql)나
 // 문자열 안의 마커가 블록 시작으로 오인되지 않게 한다.
-function stripBlocks(text) {
+function stripBlocks(text: string): string {
   const out = text.split('');
-  const blank = (start, len) => {
+  const blank = (start: number, len: number): void => {
     for (let k = 0; k < len; k++) if (out[start + k] !== '\n') out[start + k] = ' ';
   };
   let i = 0, state = null; // null | 'line' | 'block' | 'squote' | 'dquote' | 'triple'
@@ -72,47 +97,48 @@ function stripBlocks(text) {
 }
 
 // "table.col" 또는 "table.(c1, c2)" → {table, cols[]}  (public. 접두 제거, 따옴표 해제, 별칭 해소)
-function parseEndpoint(raw, aliasMap) {
-  let table, cols;
+function parseEndpoint(raw: string, aliasMap: Record<string, string>): Endpoint {
+  let table: string, cols: string[];
   const pm = raw.match(/^(.*?)\.\(([^)]+)\)$/);
   if (pm) {
-    table = pm[1];
-    cols = pm[2].split(',').map((s) => unq(s.trim()));
+    table = pm[1] ?? '';
+    cols = (pm[2] ?? '').split(',').map((s) => unq(s.trim()));
   } else {
-    const parts = [];
+    const parts: string[] = [];
     const re = new RegExp(`${NAME}`, 'g');
-    let m;
+    let m: RegExpExecArray | null;
     while ((m = re.exec(raw))) parts.push(unq(m[0]));
-    cols = [parts.pop()];
+    cols = [parts.pop() ?? ''];
     table = parts.join('.');
   }
   table = unq(table).replace(/^public\./, '');
-  if (aliasMap[table]) table = aliasMap[table];
+  const aliased = aliasMap[table];
+  if (aliased) table = aliased;
   return { table, cols };
 }
 
-const epKey = (ep) => `${ep.table}.${ep.cols.join('+')}`;
-const pairKey = (a, b) => [epKey(a), epKey(b)].sort().join('|');
+const epKey = (ep: Endpoint): string => `${ep.table}.${ep.cols.join('+')}`;
+const pairKey = (a: Endpoint, b: Endpoint): string => [epKey(a), epKey(b)].sort().join('|');
 
 // 원문에서 logical 표기된 ref의 (양끝 endpoint) 쌍 수집
-function collectLogicalKeys(text) {
-  const keys = new Set();
+function collectLogicalKeys(text: string): Set<string> {
+  const keys = new Set<string>();
   const lines = stripBlocks(text).split(/\r?\n/);
 
   // 1차: 테이블 별칭 수집
-  const aliasMap = {};
+  const aliasMap: Record<string, string> = {};
   for (const line of lines) {
     const [code] = splitComment(line);
     const tm = code.match(TABLE_RE);
-    if (tm && tm[2]) aliasMap[unq(tm[2])] = unq(tm[1]).replace(/^public\./, '');
+    if (tm && tm[2]) aliasMap[unq(tm[2])] = unq(tm[1] ?? '').replace(/^public\./, '');
   }
 
   // 2차: 본 스캔
-  let curTable = null, depth = 0;
+  let curTable: string | null = null, depth = 0;
   for (const line of lines) {
     const [code, comment] = splitComment(line);
     const tm = code.match(TABLE_RE);
-    if (tm) curTable = unq(tm[1]).replace(/^public\./, '');
+    if (tm) curTable = unq(tm[1] ?? '').replace(/^public\./, '');
     const marked = /\blogical\b/i.test(comment);
 
     if (marked) {
@@ -120,15 +146,15 @@ function collectLogicalKeys(text) {
       const codeNoStr = code.replace(/'[^']*'/g, "''");
       const rm = codeNoStr.match(REF_RE);
       if (rm) {
-        keys.add(pairKey(parseEndpoint(rm[1], aliasMap), parseEndpoint(rm[3], aliasMap)));
+        keys.add(pairKey(parseEndpoint(rm[1] ?? '', aliasMap), parseEndpoint(rm[3] ?? '', aliasMap)));
       } else {
         const im = codeNoStr.match(INLINE_RE);
         if (im && curTable && depth > 0) {
           const colM = code.match(new RegExp(`^\\s*(${NAME})`));
           if (colM) {
             keys.add(pairKey(
-              { table: curTable, cols: [unq(colM[1])] },
-              parseEndpoint(im[2], aliasMap)
+              { table: curTable, cols: [unq(colM[1] ?? '')] },
+              parseEndpoint(im[2] ?? '', aliasMap)
             ));
           }
         }
@@ -140,7 +166,7 @@ function collectLogicalKeys(text) {
   return keys;
 }
 
-function fieldType(f) {
+function fieldType(f: RawField): string {
   if (!f.type) return '';
   let t = f.type.type_name || '';
   if (f.type.args && !/\(/.test(t)) t += `(${f.type.args})`;
@@ -148,38 +174,39 @@ function fieldType(f) {
 }
 
 // @dbml/core 파싱 에러(diags)를 읽을 수 있는 메시지로 변환
-function fmtParseError(e) {
-  const diags = e && (e.diags || (e.error && e.error.diags));
+function fmtParseError(e: unknown): Error {
+  const any = e as { diags?: unknown; error?: { diags?: unknown }; message?: string } | null;
+  const diags = any && (any.diags || (any.error && any.error.diags));
   if (Array.isArray(diags) && diags.length) {
-    const msg = diags.slice(0, 5).map((d) => {
+    const msg = diags.slice(0, 5).map((d: { location?: { start?: { line: number; column: number } }; message?: string }) => {
       const st = d.location && d.location.start;
       return (st ? `${st.line}:${st.column} ` : '') + (d.message || String(d));
     }).join('\n');
     return new Error(msg + (diags.length > 5 ? `\n… 외 ${diags.length - 5}건` : ''));
   }
   if (e instanceof Error && e.message) return e;
-  return new Error(String((e && e.message) || e));
+  return new Error(String((any && any.message) || e));
 }
 
-function parseDbml(text, sourcePath) {
+function parseDbml(text: string, sourcePath?: string | null): Model {
   const logicalKeys = collectLogicalKeys(text);
 
-  let database;
+  let database: RawDatabase;
   try {
-    database = new Parser().parse(text, 'dbmlv2');
+    database = new Parser().parse(text, 'dbmlv2') as unknown as RawDatabase;
   } catch (e1) {
     try {
-      database = new Parser().parse(text, 'dbml'); // 구 파서 폴백
+      database = new Parser().parse(text, 'dbml') as unknown as RawDatabase; // 구 파서 폴백
     } catch (e2) {
       throw fmtParseError(e1);
     }
   }
 
-  const model = {
+  const model: Model = {
     meta: {
       sourcePath: sourcePath || null,
       projectName: database.name || null,
-      projectNote: (database.note && String(database.note)) || null,
+      projectNote: noteOf(database.note),
       databaseType: database.databaseType || null,
     },
     tables: [],
@@ -190,19 +217,19 @@ function parseDbml(text, sourcePath) {
 
   const schemas = database.schemas || [];
   const multiSchema = schemas.length > 1;
-  const tname = (schemaName, tableName) =>
+  const tname = (schemaName: string | null | undefined, tableName: string): string =>
     multiSchema && schemaName && schemaName !== 'public'
       ? `${schemaName}.${tableName}`
       : tableName;
   // logical 키 매칭용 이름(표시명과 달리 항상 public 제거 + 스키마 유지)
-  const kname = (schemaName, tableName) =>
+  const kname = (schemaName: string | null | undefined, tableName: string): string =>
     schemaName && schemaName !== 'public' ? `${schemaName}.${tableName}` : tableName;
 
   for (const schema of schemas) {
     for (const en of schema.enums || []) {
       model.enums.push({
         name: en.name,
-        values: (en.values || []).map((v) => ({ name: v.name, note: v.note || null })),
+        values: (en.values || []).map((v) => ({ name: v.name, note: noteOf(v.note) })),
       });
     }
 
@@ -213,14 +240,14 @@ function parseDbml(text, sourcePath) {
         pk: !!f.pk,
         unique: !!f.unique,
         notNull: !!f.not_null || !!f.pk,
-        note: (f.note && String(f.note)) || null,
+        note: noteOf(f.note),
         dflt: f.dbdefault != null ? String(f.dbdefault.value) : null,
       }));
       // 복합 PK/UNIQUE 인덱스 반영
       const pkCols = cols.filter((c) => c.pk).map((c) => c.name);
-      const uniqueIndexes = [];
+      const uniqueIndexes: string[][] = [];
       for (const idx of t.indexes || []) {
-        const idxCols = (idx.columns || []).map((c) => c.value);
+        const idxCols = (idx.columns || []).map((c) => c.value ?? '');
         if (idx.pk) {
           for (const cn of idxCols) {
             const col = cols.find((c) => c.name === cn);
@@ -236,7 +263,7 @@ function parseDbml(text, sourcePath) {
       }
       model.tables.push({
         name: tname(schema.name, t.name),
-        note: (t.note && String(t.note)) || null,
+        note: noteOf(t.note),
         group: null, // 아래 TableGroup에서 채움
         cols,
         pkCols,
@@ -247,20 +274,22 @@ function parseDbml(text, sourcePath) {
     for (const g of schema.tableGroups || []) {
       model.groups.push({
         name: g.name,
-        tables: (g.tables || []).map((x) => tname(x.schemaName || schema.name, x.tableName || x.name)),
+        tables: (g.tables || []).map((x) => tname(x.schemaName || schema.name, x.tableName || x.name || '')),
       });
     }
 
     for (const r of schema.refs || []) {
       const eps = r.endpoints || [];
       if (eps.length !== 2) continue;
-      const ep = (e) => ({
+      const ep = (e: RawEndpoint) => ({
         table: tname(e.schemaName || schema.name, e.tableName),
         keyTable: kname(e.schemaName || schema.name, e.tableName),
         cols: (e.fieldNames || []).map(unq),
         relation: e.relation, // '1' | '*'
       });
-      let [a, b] = [ep(eps[0]), ep(eps[1])];
+      const [e0, e1] = eps;
+      if (!e0 || !e1) continue;
+      const a = ep(e0), b = ep(e1);
       let child = a, parent = b;
       let oneToOne = false, manyToMany = false;
       if (a.relation === '*' && b.relation === '1') { child = a; parent = b; }
@@ -282,7 +311,7 @@ function parseDbml(text, sourcePath) {
         self: child.table === parent.table,
         onDelete: r.onDelete || null,
         onUpdate: r.onUpdate || null,
-        note: (r.note && String(r.note)) || null,
+        note: noteOf(r.note),
       });
     }
   }
@@ -298,9 +327,9 @@ function parseDbml(text, sourcePath) {
   return model;
 }
 
-function parseDbmlFile(filePath) {
+function parseDbmlFile(filePath: string): Model {
   const text = fs.readFileSync(filePath, 'utf8');
   return parseDbml(text, path.resolve(filePath));
 }
 
-module.exports = { parseDbml, parseDbmlFile };
+export { parseDbml, parseDbmlFile };

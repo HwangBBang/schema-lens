@@ -1,44 +1,89 @@
 // 전체 ERD 캔버스: elk 자동배치 + SVG 렌더 + 줌/팬 + 노드 드래그 + 관계 하이라이트.
 // 허브(users 등) 유입 엣지는 기본 접힘 → 카드 하단 칩으로 축약, 선택/토글 시에만 표시.
-const ERD = (() => {
+import ELK from 'elkjs/lib/elk.bundled.js';
+import type { ElkNode } from 'elkjs/lib/elk.bundled.js';
+import type { Model, Ref, Table } from '../src/model.ts';
+import type { Analysis, RefMeta } from '../src/semantics.ts';
+import type { AppState } from './types.ts';
+
+/** app이 넘겨주는 콜백 — 선택(해제는 null), 포커스 진입, 툴팁 */
+type Callbacks = {
+  onSelect(name: string | null): void;
+  onOpenFocus(name: string): void;
+  tooltip: { show(html: string, x: number, y: number): void; move(x: number, y: number): void; hide(): void };
+};
+
+/** 카드 하나의 배치 상자. rowY는 표시된 컬럼 행의 중심 y(카드 좌상단 기준) */
+type NodeBox = { x: number; y: number; w: number; h: number; rowY: Record<string, number> };
+/** localStorage에 저장하는 파일별 카드 좌표 — 외부에서 온 값이라 항목이 비어 있을 수 있다 */
+type SavedPositions = Record<string, { x: number; y: number } | undefined>;
+type Transform = { x: number; y: number; k: number };
+type EdgeEl = { el: SVGGElement; ref: Ref; meta: RefMeta };
+type HullEls = { rect: SVGRectElement; lab: SVGTextElement };
+/** 라우팅 좌표. 튜플이라 인덱싱에 undefined가 붙지 않는다 */
+type Pt = [number, number];
+
+export const ERD = (() => {
   const NS = 'http://www.w3.org/2000/svg';
   const W = 232, HDR = 28, ROW = 18, CHIP = 20, PADB = 8;
 
-  let svg, vp, cb;                 // cb: {onSelect,onOpenFocus,tooltip}
-  let model, sem, S;
-  let pos = {};                    // table → {x,y,w,h,rowY:{col:y}}
-  let edgeEls = [];                // {el, ref, meta}
-  let nodeEls = {};                // table → g
-  let hullByGroup = {};            // group → {rect, lab} — 노드 드래그 시 헐 실시간 리사이즈용
-  let tf = { x: 40, y: 40, k: 1 };
+  let svg: SVGSVGElement | null = null;
+  let vp: SVGGElement | null = null;
+  let cb: Callbacks | null = null;
+  let model: Model | null = null;
+  let sem: Analysis | null = null;
+  let S: AppState | null = null;
+  let pos: Record<string, NodeBox> = {};        // table → 배치 상자
+  let edgeEls: EdgeEl[] = [];
+  let nodeEls: Record<string, SVGGElement> = {};
+  let hullByGroup: Record<string, HullEls> = {}; // group → 헐 — 노드 드래그 시 실시간 리사이즈용
+  let tf: Transform = { x: 40, y: 40, k: 1 };
   let customLayout = false;
   let pendingFit = false;
 
-  const el = (tag, attrs, parent) => {
+  const need = <T,>(v: T | null | undefined, what: string): T => {
+    if (v == null) throw new Error(`ERD.mount/load 전에 ${what}을(를) 썼습니다`);
+    return v;
+  };
+  const MODEL = (): Model => need(model, 'model');
+  const SEM = (): Analysis => need(sem, 'sem');
+  const ST = (): AppState => need(S, 'S');
+  const SVG = (): SVGSVGElement => need(svg, 'svg');
+  const VP = (): SVGGElement => need(vp, 'vp');
+  const CB = (): Callbacks => need(cb, 'cb');
+  /** 관계 메타는 analyze가 모든 ref에 대해 채운다 — 없으면 모델과 분석이 어긋난 것이다 */
+  const metaOf = (r: Ref): RefMeta => need(SEM().refMeta[r.id], `refMeta[${r.id}]`);
+
+  const el = <K extends keyof SVGElementTagNameMap>(
+    tag: K,
+    attrs?: Record<string, string | number> | null,
+    parent?: Element | null,
+  ): SVGElementTagNameMap[K] => {
     const e = document.createElementNS(NS, tag);
-    for (const k in attrs || {}) e.setAttribute(k, attrs[k]);
+    const a: Record<string, string | number | undefined> = attrs || {};
+    for (const k in a) e.setAttribute(k, String(a[k]));
     if (parent) parent.appendChild(e);
     return e;
   };
-  const trunc = (s, n) => (s && s.length > n ? s.slice(0, n - 1) + '…' : s || '');
-  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const trunc = (s: string | null | undefined, n: number): string => (s && s.length > n ? s.slice(0, n - 1) + '…' : s || '');
+  const esc = (s: unknown): string => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
   // ── 표시 행 계산 ─────────────────────────────────────────
-  function rowsFor(t) {
-    const fkCols = new Set(model.refs.filter((r) => r.child.table === t.name).map((r) => r.child.cols[0]));
-    let shown = S.colsMode === 'all' ? t.cols : t.cols.filter((c) => c.pk || c.unique || fkCols.has(c.name));
+  function rowsFor(t: Table) {
+    const fkCols = new Set(MODEL().refs.filter((r) => r.child.table === t.name).map((r) => r.child.cols[0] ?? ''));
+    let shown = ST().colsMode === 'all' ? t.cols : t.cols.filter((c) => c.pk || c.unique || fkCols.has(c.name));
     if (!shown.length) shown = t.cols.slice(0, 1);
     return { shown, hidden: t.cols.length - shown.length, fkCols };
   }
-  function hubLinksFor(tname) {
-    const links = [];
-    for (const h of sem.hubs) {
-      const rs = model.refs.filter((r) => r.child.table === tname && r.parent.table === h.table && !r.self);
+  function hubLinksFor(tname: string): { hub: string; refs: Ref[] }[] {
+    const links: { hub: string; refs: Ref[] }[] = [];
+    for (const h of SEM().hubs) {
+      const rs = MODEL().refs.filter((r) => r.child.table === tname && r.parent.table === h.table && !r.self);
       if (rs.length) links.push({ hub: h.table, refs: rs });
     }
     return links;
   }
-  function nodeSize(t) {
+  function nodeSize(t: Table): { w: number; h: number } {
     const { shown, hidden } = rowsFor(t);
     const chips = hubLinksFor(t.name).length;
     const rows = shown.length + (hidden > 0 ? 1 : 0);
@@ -46,36 +91,45 @@ const ERD = (() => {
   }
 
   // ── 레이아웃 ─────────────────────────────────────────────
-  function posStoreKey() { return `dbv-pos:${S.filePath || 'untitled'}`; }
-  function savePositions() {
+  function posStoreKey(): string { return `dbv-pos:${ST().filePath || 'untitled'}`; }
+  function savePositions(): void {
     try {
-      const out = {};
-      for (const k in pos) out[k] = { x: Math.round(pos[k].x), y: Math.round(pos[k].y) };
+      const out: Record<string, { x: number; y: number }> = {};
+      for (const k in pos) { const p = pos[k]!; out[k] = { x: Math.round(p.x), y: Math.round(p.y) }; }
       localStorage.setItem(posStoreKey(), JSON.stringify(out));
     } catch {}
   }
-  function loadPositions() {
-    try { return JSON.parse(localStorage.getItem(posStoreKey())); } catch { return null; }
+  function loadPositions(): SavedPositions | null {
+    // 저장값이 없으면 null — computeLayout의 all-or-nothing 게이트가 이 null에 의존한다
+    try {
+      const raw = localStorage.getItem(posStoreKey());
+      if (raw == null) return null;
+      return JSON.parse(raw) as SavedPositions | null;
+    } catch { return null; }
   }
-  function clearPositions() { localStorage.removeItem(posStoreKey()); customLayout = false; }
+  function clearPositions(): void { localStorage.removeItem(posStoreKey()); customLayout = false; }
 
   // 정렬 방식: group(그룹 묶음) | lr(가로 흐름) | tb(세로 흐름) | grid(격자) — 파일별 유지
-  const MODES = ['group', 'lr', 'tb', 'grid'];
-  let layoutMode = 'group';
-  function layStoreKey() { return `dbv-lay:${S.filePath || 'untitled'}`; }
-  function loadLayoutMode() {
+  const MODES = ['group', 'lr', 'tb', 'grid'] as const;
+  type LayoutMode = (typeof MODES)[number];
+  /** localStorage·CLI·dataset에서 오는 값이라 런타임 검증이 필요하다 — 타입만으로 대체하지 말 것 */
+  const isMode = (v: unknown): v is LayoutMode => typeof v === 'string' && (MODES as readonly string[]).includes(v);
+  let layoutMode: LayoutMode = 'group';
+  function layStoreKey(): string { return `dbv-lay:${ST().filePath || 'untitled'}`; }
+  function loadLayoutMode(): void {
     const m = localStorage.getItem(layStoreKey());
-    layoutMode = MODES.includes(m) ? m : 'group';
+    layoutMode = isMode(m) ? m : 'group';
   }
 
   // 격자: 그룹 순서 → 정의 순서로 균등 나열 (카드 폭이 동일해 열이 맞음)
-  function gridLayout() {
-    const order = [];
-    const grouped = new Set();
-    for (const g of model.groups) {
-      for (const t of model.tables) if (t.group === g.name) { order.push(t); grouped.add(t.name); }
+  function gridLayout(): void {
+    const m = MODEL();
+    const order: Table[] = [];
+    const grouped = new Set<string>();
+    for (const g of m.groups) {
+      for (const t of m.tables) if (t.group === g.name) { order.push(t); grouped.add(t.name); }
     }
-    for (const t of model.tables) if (!grouped.has(t.name)) order.push(t);
+    for (const t of m.tables) if (!grouped.has(t.name)) order.push(t);
     const cols = Math.max(1, Math.round(Math.sqrt(order.length * 1.7)));
     const GX = 60, GY = 48;
     pos = {};
@@ -89,26 +143,30 @@ const ERD = (() => {
     }
   }
 
-  async function computeLayout() {
+  async function computeLayout(): Promise<void> {
+    const m = MODEL();
     const saved = loadPositions();
-    if (saved && model.tables.every((t) => saved[t.name])) {
+    // 전부 아니면 전무 — 한 테이블이라도 저장값이 없으면 저장본을 통째로 버리고 elk로 간다
+    const picked = saved ? m.tables.map((t) => saved[t.name]) : null;
+    if (picked && picked.every((p) => !!p)) {
       pos = {};
-      for (const t of model.tables) {
+      m.tables.forEach((t, i) => {
         const s = nodeSize(t);
-        pos[t.name] = { x: saved[t.name].x, y: saved[t.name].y, w: s.w, h: s.h, rowY: {} };
-      }
+        const sp = picked[i]!;
+        pos[t.name] = { x: sp.x, y: sp.y, w: s.w, h: s.h, rowY: {} };
+      });
       customLayout = true;
       return;
     }
     if (layoutMode === 'grid') { gridLayout(); customLayout = false; return; }
-    const hubSet = new Set(sem.hubs.map((h) => h.table));
-    const nodeOf = (t) => { const s = nodeSize(t); return { id: t.name, width: s.w, height: s.h }; };
-    const children = [];
+    const hubSet = new Set(SEM().hubs.map((h) => h.table));
+    const nodeOf = (t: Table): ElkNode => { const s = nodeSize(t); return { id: t.name, width: s.w, height: s.h }; };
+    const children: ElkNode[] = [];
     if (layoutMode === 'group') {
-      const groups = model.groups.filter((g) => g.tables.some((tn) => model.tables.some((t) => t.name === tn)));
-      const grouped = new Set();
+      const groups = m.groups.filter((g) => g.tables.some((tn) => m.tables.some((t) => t.name === tn)));
+      const grouped = new Set<string>();
       for (const g of groups) {
-        const members = model.tables.filter((t) => t.group === g.name);
+        const members = m.tables.filter((t) => t.group === g.name);
         if (!members.length) continue;
         members.forEach((t) => grouped.add(t.name));
         children.push({
@@ -122,13 +180,13 @@ const ERD = (() => {
           children: members.map(nodeOf),
         });
       }
-      for (const t of model.tables) if (!grouped.has(t.name)) children.push(nodeOf(t));
+      for (const t of m.tables) if (!grouped.has(t.name)) children.push(nodeOf(t));
     } else {
       // lr/tb: 그룹 묶음 없이 참조 구조만으로 흐름 배치
-      for (const t of model.tables) children.push(nodeOf(t));
+      for (const t of m.tables) children.push(nodeOf(t));
     }
     // 레이아웃용 엣지: 구조 엣지만(허브 유입/셀프 제외) — 접힌 엣지가 배치를 흔들지 않게
-    const edges = model.refs
+    const edges = m.refs
       .filter((r) => !r.self && !hubSet.has(r.parent.table))
       .map((r, i) => ({ id: 'e' + i, sources: [r.child.table], targets: [r.parent.table] }));
 
@@ -147,13 +205,16 @@ const ERD = (() => {
       children, edges,
     });
     pos = {};
-    (function walk(node, ox, oy) {
+    (function walk(node: ElkNode, ox: number, oy: number): void {
       for (const c of node.children || []) {
-        if (c.id.startsWith('g:')) walk(c, ox + c.x, oy + c.y);
+        if (c.id.startsWith('g:')) walk(c, ox + c.x!, oy + c.y!);
         else {
-          const t = model.tables.find((x) => x.name === c.id);
+          // await 이후라 스냅샷 m이 아니라 전역을 다시 읽는다 — 배치가 도는 사이 다른 파일이
+          // 열렸다면 사라진 테이블에서 멈추는 것이 원래 동작이다
+          const t = MODEL().tables.find((x) => x.name === c.id);
+          if (!t) throw new Error(`elk가 모르는 노드: ${c.id}`);
           const s = nodeSize(t);
-          pos[c.id] = { x: ox + c.x, y: oy + c.y, w: s.w, h: s.h, rowY: {} };
+          pos[c.id] = { x: ox + c.x!, y: oy + c.y!, w: s.w, h: s.h, rowY: {} };
         }
       }
     })(res, 0, 0);
@@ -161,19 +222,20 @@ const ERD = (() => {
   }
 
   // ── 렌더 ────────────────────────────────────────────────
-  function applyTf() {
-    vp.setAttribute('transform', `translate(${tf.x},${tf.y}) scale(${tf.k})`);
+  function applyTf(): void {
+    VP().setAttribute('transform', `translate(${tf.x},${tf.y}) scale(${tf.k})`);
     // 그룹 라벨은 줌아웃 시 화면 크기를 유지하도록 역보정 — 어느 배율에서도 그룹명이 읽히게
     const fs = Math.max(11, Math.min(11 / tf.k, 30));
-    for (const gname in hullByGroup) hullByGroup[gname].lab.style.fontSize = fs + 'px';
+    for (const gname in hullByGroup) hullByGroup[gname]!.lab.style.fontSize = fs + 'px';
     updateMinimapView();
   }
 
-  function render() {
+  function render(): void {
     if (cb && cb.tooltip) cb.tooltip.hide(); // 재렌더 시 툴팁 고착 방지
     grid = null; // 배치가 바뀌었을 수 있으므로 라우팅 격자 무효화
-    svg.innerHTML = '';
-    vp = el('g', { id: 'vp' }, svg);
+    const m = MODEL();
+    SVG().innerHTML = '';
+    vp = el('g', { id: 'vp' }, SVG());
     const hullLayer = el('g', {}, vp);
     const edgeLayer = el('g', {}, vp);
     const nodeLayer = el('g', {}, vp);
@@ -181,13 +243,13 @@ const ERD = (() => {
 
     // 그룹 헐 — 그룹 정렬에서만. 흐름/격자 정렬에선 멤버가 흩어져 헐이 오해를 만든다
     if (layoutMode === 'group') {
-      for (const g of model.groups) {
-        const members = model.tables.filter((t) => t.group === g.name && pos[t.name]);
+      for (const g of m.groups) {
+        const members = m.tables.filter((t) => t.group === g.name && pos[t.name]);
         if (!members.length) continue;
         const b = hullBox(members);
-        const gv = S.groupColor[g.name] || '--gc-x';
+        const gv = ST().groupColor[g.name] || '--gc-x';
         const hg = el('g', { class: 'hullg', style: `--gc:var(${gv})` }, hullLayer);
-        hg.dataset.group = g.name;
+        hg.dataset['group'] = g.name;
         const rect = el('rect', { class: 'hull', x: b.x, y: b.y, width: b.w, height: b.h, rx: 14 }, hg);
         const lab = el('text', { class: 'hull-label', x: b.x + 13, y: b.y + 19 }, hg);
         lab.textContent = `${g.name}  · ${members.length}`;
@@ -196,20 +258,20 @@ const ERD = (() => {
     }
 
     // 노드
-    for (const t of model.tables) {
+    for (const t of m.tables) {
       if (!pos[t.name]) continue;
       nodeLayer.appendChild(nodeEl(t));
     }
     // 엣지 (노드 위 배치 순서상 엣지가 아래)
-    const hubSet = new Set(sem.hubs.map((h) => h.table));
-    for (const r of model.refs) {
-      const meta = sem.refMeta[r.id];
+    const hubSet = new Set(SEM().hubs.map((h) => h.table));
+    for (const r of m.refs) {
+      const meta = metaOf(r);
       const g = el('g', {
         class: `edge ${meta.type}${r.kind === 'logical' ? ' logical' : ''}${!r.self && hubSet.has(r.parent.table) ? ' hub' : ''}`,
-        style: `--c:var(${sem.TYPES[meta.type].cssVar})`,
+        style: `--c:var(${SEM().TYPES[meta.type].cssVar})`,
       }, edgeLayer);
-      g.dataset.hub = !r.self && hubSet.has(r.parent.table) ? r.parent.table : '';
-      g.dataset.child = r.child.table; g.dataset.parent = r.parent.table;
+      g.dataset['hub'] = !r.self && hubSet.has(r.parent.table) ? r.parent.table : '';
+      g.dataset['child'] = r.child.table; g.dataset['parent'] = r.parent.table;
       drawEdge(g, r, meta);
       hookEdge(g, r, meta);
       edgeEls.push({ el: g, ref: r, meta });
@@ -219,25 +281,25 @@ const ERD = (() => {
     applyTf();
   }
 
-  function nodeEl(t) {
-    const p = pos[t.name];
+  function nodeEl(t: Table): SVGGElement {
+    const p = need(pos[t.name], `pos[${t.name}]`);
     const { shown, hidden, fkCols } = rowsFor(t);
     const links = hubLinksFor(t.name);
-    const gv = S.groupColor[t.group] || '--gc-x';
-    const tm = sem.tableMeta[t.name] || {};
+    const gv = ST().groupColor[t.group ?? ''] || '--gc-x';
+    const tm = SEM().tableMeta[t.name];
     const g = el('g', { class: 'node', transform: `translate(${p.x},${p.y})`, style: `--gc:var(${gv})` });
-    g.dataset.name = t.name;
+    g.dataset['name'] = t.name;
     el('rect', { class: 'box', width: p.w, height: p.h, rx: 10 }, g);
     el('path', { class: 'hd', d: `M0 10 a10 10 0 0 1 10 -10 H${p.w - 10} a10 10 0 0 1 10 10 V${HDR} H0 Z` }, g);
     const title = el('text', { class: 'title', x: 11, y: 17 }, g);
     title.textContent = trunc(t.name, 26);
     let bx = 11 + Math.min(t.name.length, 26) * 6.9 + 6;
-    if (tm.junction) {
+    if (tm?.junction) {
       el('rect', { class: 'badge-jn-bg', x: bx, y: 6, width: 27, height: 13, rx: 4 }, g);
       const bt = el('text', { class: 'badge-jn', x: bx + 4, y: 16 }, g); bt.textContent = 'N:M';
       bx += 31;
     }
-    if (tm.selfRef) { const s = el('text', { class: 'selfglyph', x: p.w - 16, y: 16 }, g); s.textContent = '⟲'; }
+    if (tm?.selfRef) { const s = el('text', { class: 'selfglyph', x: p.w - 16, y: 16 }, g); s.textContent = '⟲'; }
 
     p.rowY = {};
     let y = HDR + 4;
@@ -249,12 +311,12 @@ const ERD = (() => {
       if (c.unique) { const b = el('text', { x, y: cy + 3, style: 'font-size:7.5px;font-weight:700;fill:var(--uq)' }, g); b.textContent = 'UQ'; x += 15; }
       const nm = el('text', { class: 'cn' + (c.pk ? ' pk' : ''), x: Math.max(x, 26), y: cy + 3.5 }, g);
       nm.textContent = trunc(c.name, 18);
-      const ref = fkCols.has(c.name) && model.refs.find((r) => r.child.table === t.name && r.child.cols[0] === c.name);
+      const ref = fkCols.has(c.name) && MODEL().refs.find((r) => r.child.table === t.name && r.child.cols[0] === c.name);
       if (ref) {
-        const meta = sem.refMeta[ref.id];
+        const meta = metaOf(ref);
         const ft = el('text', {
           class: `fkTo${ref.kind === 'logical' ? ' logical' : ''}`, x: p.w - 9, y: cy + 3.5,
-          'text-anchor': 'end', style: `fill:var(${sem.TYPES[meta.type].cssVar})`,
+          'text-anchor': 'end', style: `fill:var(${SEM().TYPES[meta.type].cssVar})`,
         }, g);
         ft.textContent = trunc((ref.self ? '⟲ ' : '→ ') + ref.parent.table, 15);
       } else {
@@ -271,7 +333,7 @@ const ERD = (() => {
     for (const L of links) {
       const cy = y + 2;
       el('rect', { class: 'hubchip-bg', x: 8, y: cy, width: p.w - 16, height: 16, rx: 8 }, g);
-      const labels = [...new Set(L.refs.map((r) => sem.refMeta[r.id].label))].join('·');
+      const labels = [...new Set(L.refs.map((r) => metaOf(r).label))].join('·');
       const tx = el('text', { class: 'hubchip', x: 15, y: cy + 11.5 }, g);
       tx.textContent = trunc(`◦ ${L.hub} — ${labels}`, 32);
       const hit = el('rect', { x: 8, y: cy, width: p.w - 16, height: 16, fill: 'transparent', style: 'pointer-events:all;cursor:default' }, g);
@@ -283,26 +345,27 @@ const ERD = (() => {
     return g;
   }
 
-  function hullBox(members) {
-    const xs = members.map((t) => pos[t.name].x), ys = members.map((t) => pos[t.name].y);
-    const x2 = Math.max(...members.map((t) => pos[t.name].x + pos[t.name].w));
-    const y2 = Math.max(...members.map((t) => pos[t.name].y + pos[t.name].h));
-    const x = Math.min(...xs) - 16, y = Math.min(...ys) - 38;
+  function hullBox(members: Table[]): { x: number; y: number; w: number; h: number } {
+    // 호출부(render·updateHull)가 pos에 있는 멤버만 넘긴다
+    const boxes = members.map((t) => pos[t.name]!);
+    const x2 = Math.max(...boxes.map((b) => b.x + b.w));
+    const y2 = Math.max(...boxes.map((b) => b.y + b.h));
+    const x = Math.min(...boxes.map((b) => b.x)) - 16, y = Math.min(...boxes.map((b) => b.y)) - 38;
     return { x, y, w: x2 + 16 - x, h: y2 + 14 - y };
   }
   // 멤버 하나가 움직여도 헐이 항상 그룹 전체를 감싸도록 재계산
-  function updateHull(gname) {
+  function updateHull(gname: string): void {
     const h = hullByGroup[gname];
     if (!h) return;
-    const members = model.tables.filter((t) => t.group === gname && pos[t.name]);
+    const members = MODEL().tables.filter((t) => t.group === gname && pos[t.name]);
     if (!members.length) return;
     const b = hullBox(members);
-    h.rect.setAttribute('x', b.x); h.rect.setAttribute('y', b.y);
-    h.rect.setAttribute('width', b.w); h.rect.setAttribute('height', b.h);
-    h.lab.setAttribute('x', b.x + 13); h.lab.setAttribute('y', b.y + 19);
+    h.rect.setAttribute('x', String(b.x)); h.rect.setAttribute('y', String(b.y));
+    h.rect.setAttribute('width', String(b.w)); h.rect.setAttribute('height', String(b.h));
+    h.lab.setAttribute('x', String(b.x + 13)); h.lab.setAttribute('y', String(b.y + 19));
   }
 
-  function setHubHot(child, hub, on) {
+  function setHubHot(child: string, hub: string, on: boolean): void {
     for (const e of edgeEls) {
       if (e.ref.child.table === child && e.ref.parent.table === hub)
         e.el.classList.toggle('hot', on);
@@ -311,7 +374,7 @@ const ERD = (() => {
 
   // ── 엣지 지오메트리 ──────────────────────────────────────
   // 폴백/미리보기용 직각 엘보(수평→수직→수평, 라운드 코너)
-  function elbowWp(cx, cy, px, py) {
+  function elbowWp(cx: number, cy: number, px: number, py: number): Pt[] {
     const mx = (cx + px) / 2;
     return [[cx, cy], [mx, cy], [mx, py], [px, py]];
   }
@@ -319,15 +382,20 @@ const ERD = (() => {
   // 기본 곡선이 카드에 막히면, 카드 사이 통로를 지나는 직각(라운드 코너) 경로를 찾는다.
   // 선이 엔티티를 통과하지 않는 것이 전체 ERD 가독성의 전제.
   const CELL = 24, GRID_MARGIN = 28, INFLATE = 10;
-  let grid = null;                 // 노드 위치 확정 변경 시 null로 무효화
+  type Grid = {
+    x: number; y: number; cols: number; rows: number;
+    blocked: Uint8Array; dist: Float64Array; stamp: Int32Array; prev: Int32Array; gen: number;
+  };
+  let grid: Grid | null = null;    // 노드 위치 확정 변경 시 null로 무효화
   let fastPreview = false;         // 드래그 중에는 빠른 기본 곡선만 (확정 시 전체 재라우팅)
 
-  function ensureGrid() {
+  function ensureGrid(): Grid | null {
     if (grid) return grid;
     let x1 = 1e9, y1 = 1e9, x2 = -1e9, y2 = -1e9;
     for (const k in pos) {
-      x1 = Math.min(x1, pos[k].x); y1 = Math.min(y1, pos[k].y);
-      x2 = Math.max(x2, pos[k].x + pos[k].w); y2 = Math.max(y2, pos[k].y + pos[k].h);
+      const b = pos[k]!;
+      x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y);
+      x2 = Math.max(x2, b.x + b.w); y2 = Math.max(y2, b.y + b.h);
     }
     if (x2 < x1) return null;
     const x = x1 - GRID_MARGIN, y = y1 - GRID_MARGIN;
@@ -335,7 +403,7 @@ const ERD = (() => {
     const rows = Math.ceil((y2 - y1 + GRID_MARGIN * 2) / CELL);
     const blocked = new Uint8Array(cols * rows);
     for (const k in pos) {
-      const b = pos[k];
+      const b = pos[k]!;
       const i1 = Math.max(0, Math.floor((b.x - INFLATE - x) / CELL));
       const i2 = Math.min(cols - 1, Math.floor((b.x + b.w + INFLATE - x) / CELL));
       const j1 = Math.max(0, Math.floor((b.y - INFLATE - y) / CELL));
@@ -353,7 +421,7 @@ const ERD = (() => {
   }
 
   // (wx,wy)에서 dir 방향으로 나가며 만나는 첫 자유 셀. dir: 0=+x, 1=-x
-  function freeCellFrom(g, wx, wy, dir) {
+  function freeCellFrom(g: Grid, wx: number, wy: number, dir: number): Pt | null {
     let i = Math.floor((wx - g.x) / CELL);
     const j = Math.floor((wy - g.y) / CELL);
     const di = dir === 0 ? 1 : -1;
@@ -365,37 +433,37 @@ const ERD = (() => {
     return null;
   }
 
-  function gridRoute(cx, cy, px, py, parentRight) {
+  function gridRoute(cx: number, cy: number, px: number, py: number, parentRight: boolean): Pt[] | null {
     const g = ensureGrid();
     if (!g) return null;
     const start = freeCellFrom(g, cx, cy, parentRight ? 0 : 1);
     const goal = freeCellFrom(g, px, py, parentRight ? 1 : 0);
     if (!start || !goal) return null;
-    const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const DIRS: readonly Pt[] = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     const W = g.cols, H = g.rows;
     const gen = ++g.gen;
-    const seen = (k) => g.stamp[k] === gen;
+    const seen = (k: number): boolean => g.stamp[k] === gen;
     const sKey = (start[1] * W + start[0]) * 4 + (parentRight ? 0 : 1);
     g.stamp[sKey] = gen; g.dist[sKey] = 0; g.prev[sKey] = -1;
-    const heap = [[Math.abs(start[0] - goal[0]) + Math.abs(start[1] - goal[1]), sKey]];
-    const push = (it) => {
+    const heap: Pt[] = [[Math.abs(start[0] - goal[0]) + Math.abs(start[1] - goal[1]), sKey]];
+    const push = (it: Pt): void => {
       heap.push(it);
       for (let i = heap.length - 1; i > 0;) {
         const p = (i - 1) >> 1;
-        if (heap[p][0] <= heap[i][0]) break;
-        const t = heap[p]; heap[p] = heap[i]; heap[i] = t; i = p;
+        if (heap[p]![0] <= heap[i]![0]) break;
+        const t = heap[p]!; heap[p] = heap[i]!; heap[i] = t; i = p;
       }
     };
-    const pop = () => {
-      const top = heap[0], last = heap.pop();
+    const pop = (): Pt => {
+      const top = heap[0]!, last = heap.pop()!;
       if (heap.length) {
         heap[0] = last;
         for (let i = 0; ;) {
           const l = i * 2 + 1, r = l + 1; let m = i;
-          if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
-          if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+          if (l < heap.length && heap[l]![0] < heap[m]![0]) m = l;
+          if (r < heap.length && heap[r]![0] < heap[m]![0]) m = r;
           if (m === i) break;
-          const t = heap[m]; heap[m] = heap[i]; heap[i] = t; i = m;
+          const t = heap[m]!; heap[m] = heap[i]!; heap[i] = t; i = m;
         }
       }
       return top;
@@ -405,14 +473,15 @@ const ERD = (() => {
       const [, key] = pop();
       const dir = key & 3, cell = key >> 2, ci = cell % W, cj = (cell / W) | 0;
       if (ci === goal[0] && cj === goal[1]) { found = key; break; }
-      const d0 = g.dist[key];
+      const d0 = g.dist[key]!;
       for (let nd = 0; nd < 4; nd++) {
-        const ni = ci + DIRS[nd][0], nj = cj + DIRS[nd][1];
+        const dd = DIRS[nd]!;
+        const ni = ci + dd[0], nj = cj + dd[1];
         if (ni < 0 || nj < 0 || ni >= W || nj >= H) continue;
         if (g.blocked[nj * W + ni]) continue;
         const nk = (nj * W + ni) * 4 + nd;
         const cost = d0 + 1 + (nd === dir ? 0 : 1.6); // 턴 페널티 — 꺾임 최소화
-        if (!seen(nk) || cost < g.dist[nk]) {
+        if (!seen(nk) || cost < g.dist[nk]!) {
           g.stamp[nk] = gen; g.dist[nk] = cost; g.prev[nk] = key;
           push([cost + Math.abs(ni - goal[0]) + Math.abs(nj - goal[1]), nk]);
         }
@@ -420,44 +489,44 @@ const ERD = (() => {
     }
     if (found < 0) return null;
     // 셀 경로 복원 → 방향 전환점만 추출 → 월드 waypoint
-    const cells = [];
-    for (let k = found; k >= 0; k = g.prev[k]) cells.push(k >> 2);
+    const cells: number[] = [];
+    for (let k = found; k >= 0; k = g.prev[k]!) cells.push(k >> 2);
     cells.reverse();
-    const cpt = cells.map((c) => [c % W, (c / W) | 0]);
-    const turns = [cpt[0]];
+    const cpt: Pt[] = cells.map((c) => [c % W, (c / W) | 0]);
+    const turns: Pt[] = [cpt[0]!];
     for (let k = 1; k < cpt.length - 1; k++) {
-      if (cpt[k][0] - cpt[k - 1][0] !== cpt[k + 1][0] - cpt[k][0] ||
-          cpt[k][1] - cpt[k - 1][1] !== cpt[k + 1][1] - cpt[k][1]) turns.push(cpt[k]);
+      if (cpt[k]![0] - cpt[k - 1]![0] !== cpt[k + 1]![0] - cpt[k]![0] ||
+          cpt[k]![1] - cpt[k - 1]![1] !== cpt[k + 1]![1] - cpt[k]![1]) turns.push(cpt[k]!);
     }
-    if (cpt.length > 1) turns.push(cpt[cpt.length - 1]);
-    const wp = turns.map(([i, j]) => [g.x + i * CELL + CELL / 2, g.y + j * CELL + CELL / 2]);
-    // 시작 스텁을 자식 행 높이에, 끝 스텁을 부모 진입 높이에 맞춘다
-    if (wp.length > 1 && Math.abs(wp[0][1] - cy) <= CELL) wp[0][1] = cy;
-    const last = wp[wp.length - 1];
+    if (cpt.length > 1) turns.push(cpt[cpt.length - 1]!);
+    const wp: Pt[] = turns.map(([i, j]) => [g.x + i * CELL + CELL / 2, g.y + j * CELL + CELL / 2]);
+    // 시작 스텁을 자식 행 높이에, 끝 스텁을 부모 진입 높이에 맞춘다 (wp 원소를 제자리 수정)
+    if (wp.length > 1 && Math.abs(wp[0]![1] - cy) <= CELL) wp[0]![1] = cy;
+    const last = wp[wp.length - 1]!;
     if (wp.length > 1 && Math.abs(last[1] - py) <= CELL) last[1] = py;
     wp.unshift([cx, cy]);
     wp.push([px, py]);
     return wp;
   }
 
-  function roundedPath(wp) {
-    let d = `M${wp[0][0]},${wp[0][1]}`;
+  function roundedPath(wp: Pt[]): string {
+    let d = `M${wp[0]![0]},${wp[0]![1]}`;
     for (let k = 1; k < wp.length - 1; k++) {
-      const a = wp[k - 1], b = wp[k], c = wp[k + 1];
-      const v1 = [b[0] - a[0], b[1] - a[1]], v2 = [c[0] - b[0], c[1] - b[1]];
+      const a = wp[k - 1]!, b = wp[k]!, c = wp[k + 1]!;
+      const v1: Pt = [b[0] - a[0], b[1] - a[1]], v2: Pt = [c[0] - b[0], c[1] - b[1]];
       const l1 = Math.hypot(v1[0], v1[1]), l2 = Math.hypot(v2[0], v2[1]);
       if (!l1 || !l2) continue;
       const rr = Math.min(12, l1 / 2, l2 / 2);
       d += ` L${b[0] - (v1[0] / l1) * rr},${b[1] - (v1[1] / l1) * rr}` +
            ` Q${b[0]},${b[1]} ${b[0] + (v2[0] / l2) * rr},${b[1] + (v2[1] / l2) * rr}`;
     }
-    d += ` L${wp[wp.length - 1][0]},${wp[wp.length - 1][1]}`;
+    d += ` L${wp[wp.length - 1]![0]},${wp[wp.length - 1]![1]}`;
     return d;
   }
 
   // 모든 관계선은 격자 직각(라운드 코너) 스타일로 통일 — 곡선/직각 혼재는 읽기를 방해한다.
   // 드래그 중(fastPreview)과 경로 탐색 실패 시에는 같은 스타일의 단순 엘보로 그린다.
-  function routeEdge(r, cx, cy, px, py, parentRight) {
+  function routeEdge(cx: number, cy: number, px: number, py: number, parentRight: boolean): string {
     if (!fastPreview) {
       const wp = gridRoute(cx, cy, px, py, parentRight);
       if (wp) return roundedPath(wp);
@@ -465,23 +534,27 @@ const ERD = (() => {
     return roundedPath(elbowWp(cx, cy, px, py));
   }
 
-  function drawEdge(g, r, meta) {
+  function drawEdge(g: SVGGElement, r: Ref, meta: RefMeta): void {
     g.innerHTML = '';
     const c = pos[r.child.table], p = pos[r.parent.table];
     if (!c || !p) return;
-    let d, ax, ay, tipDir, labX, labY;
+    // dotX/dotY는 두 분기에서 각각 채운다 (원래 var로 호이스팅되던 자리)
+    let d: string, ax: number, ay: number, tipDir: number, labX: number, labY: number, dotX: number, dotY: number;
+    const col = r.child.cols[0];
+    // 접힌 컬럼이라 rowY에 없으면 15(헤더 아래 기본 높이)로 떨어진다 — 정상 경로다
+    const childRowY = (col ? c.rowY[col] : undefined) || 15;
     if (r.self) {
-      const x = c.x + c.w, y1 = c.y + (c.rowY[r.child.cols[0]] || 15), y2 = c.y + 9;
+      const x = c.x + c.w, y1 = c.y + childRowY, y2 = c.y + 9;
       d = `M${x},${y1} C${x + 46},${y1} ${x + 46},${y2} ${x + 2},${y2}`;
       ax = x + 2; ay = y2; tipDir = -1; labX = x + 30; labY = (y1 + y2) / 2;
-      var dotX = x, dotY = y1;
+      dotX = x; dotY = y1;
     } else {
-      const cy = c.y + (c.rowY[r.child.cols[0]] || 15);
+      const cy = c.y + childRowY;
       const py = p.y + 14;
       const parentRight = p.x + p.w / 2 >= c.x + c.w / 2;
       const cx = parentRight ? c.x + c.w : c.x;
       const px = parentRight ? p.x : p.x + p.w;
-      d = routeEdge(r, cx, cy, px, py, parentRight);
+      d = routeEdge(cx, cy, px, py, parentRight);
       ax = px; ay = py; tipDir = parentRight ? 1 : -1;
       labX = px - tipDir * 20; labY = py - 7;
       dotX = cx; dotY = cy;
@@ -493,7 +566,7 @@ const ERD = (() => {
     const lab = el('text', { class: 'card-lab', x: labX, y: labY, 'text-anchor': 'middle' }, g);
     lab.textContent = meta.card;
   }
-  function redrawEdgesTouching(tname) {
+  function redrawEdgesTouching(tname: string | null): void {
     for (const e of edgeEls) {
       if (!tname || e.ref.child.table === tname || e.ref.parent.table === tname) {
         drawEdge(e.el, e.ref, e.meta);
@@ -501,7 +574,7 @@ const ERD = (() => {
       }
     }
   }
-  function redrawEdgesTouchingSet(set) {
+  function redrawEdgesTouchingSet(set: Set<string>): void {
     for (const e of edgeEls) {
       if (set.has(e.ref.child.table) || set.has(e.ref.parent.table)) {
         drawEdge(e.el, e.ref, e.meta);
@@ -509,26 +582,27 @@ const ERD = (() => {
       }
     }
   }
-  // 드래그 확정 후: 라우팅은 모든 노드 위치에 의존하므로 비인접 엣지까지 전부 재계산
-  function settleAfterMove() {
+  // 드래그 확정 후: 라우팅은 모든 노드 위치에 의존하므로 비인접 엣지까지 전부 재계산.
+  // grid 무효화가 redrawEdgesTouching보다 반드시 먼저여야 새 위치로 A*가 다시 돈다.
+  function settleAfterMove(): void {
     fastPreview = false;
     grid = null;
     redrawEdgesTouching(null);
     buildMinimap();
-    if (S.selected) select(S.selected);
+    if (ST().selected) select(ST().selected);
   }
-  function hookEdge(g, r, meta) {
-    const hit = g.querySelector('.hit');
+  function hookEdge(g: SVGGElement, r: Ref, meta: RefMeta): void {
+    const hit = g.querySelector<SVGPathElement>('.hit');
     if (!hit) return;
     hit.addEventListener('pointerenter', (ev) => {
       g.classList.add('hot');
-      cb.tooltip.show(edgeTooltipHtml(r, meta), ev.clientX, ev.clientY);
+      CB().tooltip.show(edgeTooltipHtml(r, meta), ev.clientX, ev.clientY);
     });
-    hit.addEventListener('pointermove', (ev) => cb.tooltip.move(ev.clientX, ev.clientY));
-    hit.addEventListener('pointerleave', () => { g.classList.remove('hot'); cb.tooltip.hide(); });
+    hit.addEventListener('pointermove', (ev) => CB().tooltip.move(ev.clientX, ev.clientY));
+    hit.addEventListener('pointerleave', () => { g.classList.remove('hot'); CB().tooltip.hide(); });
   }
-  function edgeTooltipHtml(r, meta) {
-    const ty = sem.TYPES[meta.type];
+  function edgeTooltipHtml(r: Ref, meta: RefMeta): string {
+    const ty = SEM().TYPES[meta.type];
     return `<div class="tt-head">${esc(r.child.table)}.${esc(r.child.cols.join(','))} → ${esc(r.parent.table)}.${esc(r.parent.cols.join(','))}</div>
       <div class="tt-chips">
         <span class="ty" style="--c:var(${ty.cssVar})">${ty.label}</span>
@@ -540,20 +614,20 @@ const ERD = (() => {
   }
 
   // ── 선택/하이라이트 ──────────────────────────────────────
-  function select(name) {
-    S.selected = name;
-    svg.classList.toggle('has-sel', !!name);
-    const near = new Set(name ? [name] : []);
+  function select(name: string | null): void {
+    ST().selected = name;
+    SVG().classList.toggle('has-sel', !!name);
+    const near = new Set<string>(name ? [name] : []);
     if (name) {
       for (const e of edgeEls) {
-        if (S.filter === 'real' && e.ref.kind === 'logical') continue;
+        if (ST().filter === 'real' && e.ref.kind === 'logical') continue;
         if (e.ref.child.table === name) near.add(e.ref.parent.table);
         if (e.ref.parent.table === name) near.add(e.ref.child.table);
       }
     }
     for (const tn in nodeEls) {
-      nodeEls[tn].classList.toggle('sel', tn === name);
-      nodeEls[tn].classList.toggle('dim', !!name && !near.has(tn));
+      nodeEls[tn]!.classList.toggle('sel', tn === name);
+      nodeEls[tn]!.classList.toggle('dim', !!name && !near.has(tn));
     }
     for (const e of edgeEls) {
       const adj = !!name && (e.ref.child.table === name || e.ref.parent.table === name);
@@ -561,54 +635,57 @@ const ERD = (() => {
       e.el.classList.toggle('dim', !!name && !adj);
     }
   }
-  function applyHubToggles() {
-    // 켜진 허브의 엣지만 hub-on — 허브별 독립 토글
+  function applyHubToggles(): void {
+    // 켜진 허브의 엣지만 hub-on — 허브별 독립 토글. 비허브 엣지는 dataset.hub가 빈 문자열이다
     for (const e of edgeEls) {
-      const hub = e.el.dataset.hub;
-      if (hub) e.el.classList.toggle('hub-on', !!S.hubShown[hub]);
+      const hub = e.el.dataset['hub'];
+      if (hub) e.el.classList.toggle('hub-on', !!ST().hubShown[hub]);
     }
   }
-  function applyFilter() { svg.classList.toggle('filter-real', S.filter === 'real'); if (S.selected) select(S.selected); }
+  function applyFilter(): void { SVG().classList.toggle('filter-real', ST().filter === 'real'); if (ST().selected) select(ST().selected); }
 
   // ── 미니맵 ──────────────────────────────────────────────
   const MM = { w: 176, h: 120, pad: 6 };
-  let mmSvg = null, mmView = null, mmScale = 1, mmBox = null, mmRaf = 0;
+  let mmSvg: SVGSVGElement | null = null, mmView: SVGRectElement | null = null;
+  let mmScale = 1, mmBox: { x: number; y: number; w: number; h: number } | null = null, mmRaf = 0;
 
-  function scheduleMinimap() {
-    if (mmRaf) return;
+  function scheduleMinimap(): void {
+    if (mmRaf) return; // 0 = 예약 없음 (rAF는 1부터 반환한다)
     mmRaf = requestAnimationFrame(() => { mmRaf = 0; buildMinimap(); });
   }
 
-  function mountMinimap() {
-    mmSvg = document.getElementById('minimap');
-    if (!mmSvg) return;
+  function mountMinimap(): void {
+    const mm = document.getElementById('minimap') as SVGSVGElement | null;
+    mmSvg = mm;
+    if (!mm) return;
     // 크기의 단일 출처는 MM 상수 — CSS에는 위치/외양만 둔다
-    mmSvg.setAttribute('viewBox', `0 0 ${MM.w} ${MM.h}`);
-    mmSvg.style.width = MM.w + 'px';
-    mmSvg.style.height = MM.h + 'px';
-    mmSvg.style.boxSizing = 'content-box';
-    const jump = (e) => {
-      const mr = mmSvg.getBoundingClientRect(), r = svg.getBoundingClientRect();
-      const wx = (e.clientX - mr.left - mmSvg.clientLeft - MM.pad) / mmScale + mmBox.x;
-      const wy = (e.clientY - mr.top - mmSvg.clientTop - MM.pad) / mmScale + mmBox.y;
+    mm.setAttribute('viewBox', `0 0 ${MM.w} ${MM.h}`);
+    mm.style.width = MM.w + 'px';
+    mm.style.height = MM.h + 'px';
+    mm.style.boxSizing = 'content-box';
+    const jump = (e: PointerEvent): void => {
+      const mr = mm.getBoundingClientRect(), r = SVG().getBoundingClientRect();
+      const wx = (e.clientX - mr.left - mm.clientLeft - MM.pad) / mmScale + mmBox!.x;
+      const wy = (e.clientY - mr.top - mm.clientTop - MM.pad) / mmScale + mmBox!.y;
       tf.x = r.width / 2 - wx * tf.k;
       tf.y = r.height / 2 - wy * tf.k;
       applyTf();
     };
     let dragging = false;
-    mmSvg.addEventListener('pointerdown', (e) => {
+    mm.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || !mmBox) return;
-      dragging = true; mmSvg.setPointerCapture(e.pointerId); jump(e);
+      dragging = true; mm.setPointerCapture(e.pointerId); jump(e);
     });
-    mmSvg.addEventListener('pointermove', (e) => { if (dragging) jump(e); });
-    mmSvg.addEventListener('pointerup', () => { dragging = false; });
-    mmSvg.addEventListener('pointercancel', () => { dragging = false; });
-    mmSvg.addEventListener('lostpointercapture', () => { dragging = false; });
+    mm.addEventListener('pointermove', (e) => { if (dragging) jump(e); });
+    mm.addEventListener('pointerup', () => { dragging = false; });
+    mm.addEventListener('pointercancel', () => { dragging = false; });
+    mm.addEventListener('lostpointercapture', () => { dragging = false; });
     window.addEventListener('resize', updateMinimapView);
   }
-  function buildMinimap() {
+  function buildMinimap(): void {
     if (!mmSvg || !model) return;
     mmBox = contentBBox();
+    // !(x > 0)은 0·음수뿐 아니라 NaN까지 걸러내려는 형태다 — <= 0 으로 바꾸지 말 것
     if (!(mmBox.w > 0) || !(mmBox.h > 0)) { mmSvg.innerHTML = ''; mmView = null; mmBox = null; return; }
     mmScale = Math.min((MM.w - MM.pad * 2) / mmBox.w, (MM.h - MM.pad * 2) / mmBox.h);
     mmSvg.innerHTML = '';
@@ -618,33 +695,34 @@ const ERD = (() => {
         class: 'mm-node',
         x: MM.pad + (p.x - mmBox.x) * mmScale, y: MM.pad + (p.y - mmBox.y) * mmScale,
         width: Math.max(2, p.w * mmScale), height: Math.max(2, p.h * mmScale),
-        style: `fill:var(${S.groupColor[t.group] || '--gc-x'})`,
+        style: `fill:var(${ST().groupColor[t.group ?? ''] || '--gc-x'})`,
       }, mmSvg);
     }
     mmView = el('rect', { class: 'mm-view', rx: 2 }, mmSvg);
     updateMinimapView();
   }
-  function updateMinimapView() {
+  function updateMinimapView(): void {
     if (!mmView || !mmBox) return;
-    const r = svg.getBoundingClientRect();
+    const r = SVG().getBoundingClientRect();
     if (!r.width) return;
-    mmView.setAttribute('x', MM.pad + (-tf.x / tf.k - mmBox.x) * mmScale);
-    mmView.setAttribute('y', MM.pad + (-tf.y / tf.k - mmBox.y) * mmScale);
-    mmView.setAttribute('width', (r.width / tf.k) * mmScale);
-    mmView.setAttribute('height', (r.height / tf.k) * mmScale);
+    mmView.setAttribute('x', String(MM.pad + (-tf.x / tf.k - mmBox.x) * mmScale));
+    mmView.setAttribute('y', String(MM.pad + (-tf.y / tf.k - mmBox.y) * mmScale));
+    mmView.setAttribute('width', String((r.width / tf.k) * mmScale));
+    mmView.setAttribute('height', String((r.height / tf.k) * mmScale));
   }
 
   // ── 뷰포트 ──────────────────────────────────────────────
-  function contentBBox() {
+  function contentBBox(): { x: number; y: number; w: number; h: number } {
     let x1 = 1e9, y1 = 1e9, x2 = -1e9, y2 = -1e9;
     for (const k in pos) {
-      x1 = Math.min(x1, pos[k].x); y1 = Math.min(y1, pos[k].y);
-      x2 = Math.max(x2, pos[k].x + pos[k].w); y2 = Math.max(y2, pos[k].y + pos[k].h);
+      const b = pos[k]!;
+      x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y);
+      x2 = Math.max(x2, b.x + b.w); y2 = Math.max(y2, b.y + b.h);
     }
     return { x: x1 - 30, y: y1 - 50, w: x2 - x1 + 60, h: y2 - y1 + 80 };
   }
-  function fit() {
-    const b = contentBBox(), r = svg.getBoundingClientRect();
+  function fit(): void {
+    const b = contentBBox(), r = SVG().getBoundingClientRect();
     if (b.w <= 0) return;
     if (!r.width || !r.height) { pendingFit = true; return; } // 숨겨진 상태(포커스 모드)에서 scale 0 방지
     pendingFit = false;
@@ -652,21 +730,31 @@ const ERD = (() => {
     tf = { k, x: (r.width - b.w * k) / 2 - b.x * k, y: (r.height - b.h * k) / 2 - b.y * k };
     applyTf();
   }
-  function fitIfPending() { if (pendingFit) fit(); else updateMinimapView(); } // 숨김 중 리사이즈로 스테일해진 미니맵 뷰포트 보정
-  function centerOn(name) {
+  function fitIfPending(): void { if (pendingFit) fit(); else updateMinimapView(); } // 숨김 중 리사이즈로 스테일해진 미니맵 뷰포트 보정
+  function centerOn(name: string): void {
     const p = pos[name]; if (!p) return;
-    const r = svg.getBoundingClientRect();
+    const r = SVG().getBoundingClientRect();
     tf.x = r.width / 2 - (p.x + p.w / 2) * tf.k;
     tf.y = r.height / 2 - (p.y + p.h / 2) * tf.k;
     applyTf();
   }
 
-  function hookViewport() {
-    svg.addEventListener('wheel', (e) => {
+  type Drag =
+    | { type: 'pan'; sx: number; sy: number; ox: number; oy: number; moved: boolean }
+    | { type: 'node'; name: string; group: string | null; sx: number; sy: number; ox: number; oy: number; moved: boolean }
+    | {
+        type: 'group'; members: string[]; sx: number; sy: number; moved: boolean;
+        orig: Record<string, { x: number; y: number }>;
+        hullEls: { n: Element; x: number; y: number }[];
+      };
+
+  function hookViewport(): void {
+    const sv = SVG();
+    sv.addEventListener('wheel', (e) => {
       e.preventDefault();
       if (e.ctrlKey || e.metaKey) {
         const k2 = Math.min(2.5, Math.max(0.12, tf.k * Math.exp(-e.deltaY * 0.01)));
-        const r = svg.getBoundingClientRect();
+        const r = sv.getBoundingClientRect();
         const mx = e.clientX - r.left, my = e.clientY - r.top;
         tf.x = mx - ((mx - tf.x) / tf.k) * k2;
         tf.y = my - ((my - tf.y) / tf.k) * k2;
@@ -675,33 +763,38 @@ const ERD = (() => {
       applyTf();
     }, { passive: false });
 
-    let drag = null;
-    svg.addEventListener('pointerdown', (e) => {
+    let drag: Drag | null = null;
+    sv.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return; // 우클릭 드래그/선택 방지
-      const nodeG = e.target.closest && e.target.closest('.node');
-      const hullG = !nodeG && e.target.closest && e.target.closest('.hullg');
+      const tgt = e.target instanceof Element ? e.target : null;
+      const nodeG = tgt?.closest<SVGGElement>('.node') ?? null;
+      const hullG = !nodeG ? tgt?.closest<SVGGElement>('.hullg') ?? null : null;
       if (nodeG) {
-        const name = nodeG.dataset.name;
-        const t = model.tables.find((x) => x.name === name);
-        fastPreview = true; // 드래그 중엔 빠른 곡선 미리보기, 확정 시 전체 재라우팅
-        drag = { type: 'node', name, group: t && t.group, sx: e.clientX, sy: e.clientY, ox: pos[name].x, oy: pos[name].y, moved: false };
+        const name = nodeG.dataset['name'] ?? '';
+        const p = pos[name];
+        // pos 조회를 fastPreview 대입보다 먼저 — 조기 return 하면 fastPreview가 true로 고착된다
+        if (p) {
+          const t = MODEL().tables.find((x) => x.name === name);
+          fastPreview = true; // 드래그 중엔 빠른 곡선 미리보기, 확정 시 전체 재라우팅
+          drag = { type: 'node', name, group: t?.group ?? null, sx: e.clientX, sy: e.clientY, ox: p.x, oy: p.y, moved: false };
+        }
       } else if (hullG) {
         // 그룹(헐) 드래그: 멤버 테이블 전체를 한 단위로 이동
         fastPreview = true;
-        const gname = hullG.dataset.group;
-        const members = model.tables.filter((t) => t.group === gname && pos[t.name]).map((t) => t.name);
+        const gname = hullG.dataset['group'] ?? '';
+        const members = MODEL().tables.filter((t) => t.group === gname && pos[t.name]).map((t) => t.name);
         drag = {
           type: 'group', members, sx: e.clientX, sy: e.clientY, moved: false,
-          orig: Object.fromEntries(members.map((m) => [m, { x: pos[m].x, y: pos[m].y }])),
-          hullEls: [...hullG.querySelectorAll('rect,text')].map((n) => ({ n, x: +n.getAttribute('x'), y: +n.getAttribute('y') })),
+          orig: Object.fromEntries(members.map((m) => [m, { x: pos[m]!.x, y: pos[m]!.y }])),
+          hullEls: [...hullG.querySelectorAll<SVGElement>('rect,text')].map((n) => ({ n, x: +(n.getAttribute('x') ?? ''), y: +(n.getAttribute('y') ?? '') })),
         };
-      } else if (!e.target.closest('.edge')) {
+      } else if (!tgt?.closest('.edge')) {
         drag = { type: 'pan', sx: e.clientX, sy: e.clientY, ox: tf.x, oy: tf.y, moved: false };
-        svg.classList.add('panning');
+        sv.classList.add('panning');
       }
-      svg.setPointerCapture(e.pointerId);
+      sv.setPointerCapture(e.pointerId);
     });
-    svg.addEventListener('pointermove', (e) => {
+    sv.addEventListener('pointermove', (e) => {
       if (!drag) return;
       const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
       if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
@@ -709,44 +802,47 @@ const ERD = (() => {
       else if (drag.type === 'group') {
         const dxk = dx / tf.k, dyk = dy / tf.k;
         for (const m of drag.members) {
-          pos[m].x = drag.orig[m].x + dxk; pos[m].y = drag.orig[m].y + dyk;
-          nodeEls[m].setAttribute('transform', `translate(${pos[m].x},${pos[m].y})`);
+          // members는 pos에 있는 이름만 모았고, nodeEls도 같은 렌더에서 채워진다
+          const p = pos[m]!, o = drag.orig[m]!, g = nodeEls[m]!;
+          p.x = o.x + dxk; p.y = o.y + dyk;
+          g.setAttribute('transform', `translate(${p.x},${p.y})`);
         }
-        for (const h of drag.hullEls) { h.n.setAttribute('x', h.x + dxk); h.n.setAttribute('y', h.y + dyk); }
+        for (const h of drag.hullEls) { h.n.setAttribute('x', String(h.x + dxk)); h.n.setAttribute('y', String(h.y + dyk)); }
         redrawEdgesTouchingSet(new Set(drag.members));
         scheduleMinimap();
       }
       else {
-        const p = pos[drag.name];
+        const p = pos[drag.name]!;
         p.x = drag.ox + dx / tf.k; p.y = drag.oy + dy / tf.k;
-        nodeEls[drag.name].setAttribute('transform', `translate(${p.x},${p.y})`);
+        nodeEls[drag.name]!.setAttribute('transform', `translate(${p.x},${p.y})`);
         redrawEdgesTouching(drag.name);
         if (drag.group) updateHull(drag.group);
         scheduleMinimap();
       }
     });
-    svg.addEventListener('pointerup', (e) => {
+    sv.addEventListener('pointerup', () => {
       if (!drag) return;
       if (drag.type === 'node') {
-        if (!drag.moved) { fastPreview = false; cb.onSelect(drag.name === S.selected ? null : drag.name); }
+        if (!drag.moved) { fastPreview = false; CB().onSelect(drag.name === ST().selected ? null : drag.name); }
         else { customLayout = true; savePositions(); settleAfterMove(); }
       } else if (drag.type === 'group') {
-        if (!drag.moved) { fastPreview = false; cb.onSelect(null); }
+        if (!drag.moved) { fastPreview = false; CB().onSelect(null); }
         else { customLayout = true; savePositions(); settleAfterMove(); }
-      } else if (drag.type === 'pan' && !drag.moved) cb.onSelect(null);
-      svg.classList.remove('panning');
+      } else if (drag.type === 'pan' && !drag.moved) CB().onSelect(null);
+      sv.classList.remove('panning');
       drag = null;
     });
-    svg.addEventListener('dblclick', (e) => {
-      const nodeG = e.target.closest && e.target.closest('.node');
-      if (nodeG) cb.onOpenFocus(nodeG.dataset.name);
+    sv.addEventListener('dblclick', (e) => {
+      const tgt = e.target instanceof Element ? e.target : null;
+      const nodeG = tgt?.closest<SVGGElement>('.node') ?? null;
+      if (nodeG) CB().onOpenFocus(nodeG.dataset['name'] ?? '');
     });
   }
 
   // ── 공개 API ────────────────────────────────────────────
   return {
-    mount(svgEl, callbacks) { svg = svgEl; cb = callbacks; hookViewport(); mountMinimap(); },
-    async load(m, s, state) {
+    mount(svgEl: SVGSVGElement, callbacks: Callbacks): void { svg = svgEl; cb = callbacks; hookViewport(); mountMinimap(); },
+    async load(m: Model, s: Analysis, state: AppState): Promise<void> {
       model = m; sem = s; S = state;
       loadLayoutMode();
       await computeLayout();
@@ -755,21 +851,21 @@ const ERD = (() => {
       applyFilter();
       if (S.selected) select(S.selected);
     },
-    rerender() { render(); if (S.selected) select(S.selected); applyFilter(); },
+    rerender(): void { render(); if (ST().selected) select(ST().selected); applyFilter(); },
     select, fit, fitIfPending, centerOn, applyFilter, applyHubToggles,
-    async resetLayout() { if (!model) return; clearPositions(); await computeLayout(); render(); fit(); applyFilter(); if (S.selected) select(S.selected); },
+    async resetLayout(): Promise<void> { if (!model) return; clearPositions(); await computeLayout(); render(); fit(); applyFilter(); if (ST().selected) select(ST().selected); },
     // 하단 정렬 바: 방식 변경 → 커스텀 배치 폐기, 재배치 후 저장(재시작에도 유지)
-    async arrange(mode) {
-      if (!model || !MODES.includes(mode)) return;
+    async arrange(mode: string | null | undefined): Promise<void> {
+      if (!model || !isMode(mode)) return;
       layoutMode = mode;
       try { localStorage.setItem(layStoreKey(), mode); } catch {}
       clearPositions();
       await computeLayout();
       savePositions();
       render(); fit(); applyFilter();
-      if (S.selected) select(S.selected);
+      if (ST().selected) select(ST().selected);
     },
-    getLayoutMode: () => layoutMode,
-    hasCustomLayout: () => customLayout,
+    getLayoutMode: (): LayoutMode => layoutMode,
+    hasCustomLayout: (): boolean => customLayout,
   };
 })();
