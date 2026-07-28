@@ -2,12 +2,13 @@
   "name": "schema-lens",
   "version": "1.0.0",
   "description": "DBML 스키마를 전체 ERD와 1-테이블 포커스 모드로 탐색하는 데스크톱 앱",
-  "main": "main.js",
+  "main": "out/main.js",
   "scripts": {
-    "test": "node scripts/check-model.js",
     "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node out/scripts/check-model.js",
+    "test:contrast": "npm run build && node out/scripts/check-contrast.js",
     "start": "npm run build && electron .",
-    "test:contrast": "node scripts/check-contrast.js",
     "pack": "npm run build && electron-builder --mac --dir",
     "dist": "npm run build && electron-builder --mac"
   },
@@ -24,12 +25,11 @@
       "buildResources": "build"
     },
     "files": [
-      "main.js",
-      "preload.js",
+      "out/main.js",
+      "out/preload.js",
       "renderer/index.html",
       "renderer/style.css",
       "renderer/bundle.js",
-      "src/**",
       "assets/example.dbml"
     ],
     "mac": {
@@ -56,9 +56,11 @@
     }
   },
   "devDependencies": {
+    "@types/node": "^26.1.2",
     "electron": "^43.1.1",
     "electron-builder": "^26.15.3",
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@dbml/core": "^8.3.1-custom-metadata.3",
