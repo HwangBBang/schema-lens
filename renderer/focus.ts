@@ -1,21 +1,48 @@
+// @ts-nocheck — 타입 주석 작업 중(155건 남음). 다 붙으면 이 줄을 지운다.
 // 포커스 모드: 레퍼런스 탐색기의 3열(피참조|포커스|참조) 뷰를 범용 모델로 이식.
 import * as Semantics from '../src/semantics.ts';
 import { ERD } from './erd.ts';
+import type { Model, Ref, Table } from '../src/model.ts';
+import type { Analysis } from '../src/semantics.ts';
 import type { AppState } from './types.ts';
+
+/** app이 넘겨주는 콜백 — 이동과 뒤로가기, 툴팁 */
+type Callbacks = {
+  go(name: string): void;
+  back?: () => void;
+  tooltip: { show(html: string, x: number, y: number): void; move(x: number, y: number): void; hide(): void };
+};
+const asEl = (t: EventTarget | null): Element | null => (t instanceof Element ? t : null);
 
 export const Focus = (() => {
   const NS = 'http://www.w3.org/2000/svg';
-  let model, sem, S, cb;   // cb: {go}
-  let childrenEdges = {}, parentsEdges = {};
+  let model: Model | null = null;
+  let sem: Analysis | null = null;
+  let S: AppState | null = null;
+  let cb: Callbacks | null = null;
+  let childrenEdges: Record<string, Ref[]> = {}, parentsEdges: Record<string, Ref[]> = {};
 
-  const $ = (id) => document.getElementById(id);
-  const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const byName = () => new Map(model.tables.map((t) => [t.name, t]));
+  const need = <T,>(v: T | null, what: string): T => {
+    if (v == null) throw new Error(`Focus.init 전에 ${what}을(를) 썼습니다`);
+    return v;
+  };
+  const M = (): Model => need(model, 'model');
+  const SEM = (): Analysis => need(sem, 'sem');
+  const ST = (): AppState => need(S, 'S');
 
-  function neighbors(name) {
-    const parents = {}, children = {}, self = [];
-    for (const r of model.refs) {
-      if (S.filter === 'real' && r.kind === 'logical') continue;
+  const $ = (id: string): HTMLElement => {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`요소를 찾을 수 없습니다: #${id}`);
+    return el;
+  };
+  const esc = (s: unknown): string => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const byName = (): Map<string, Table> => new Map((model?.tables ?? []).map((t) => [t.name, t]));
+
+  function neighbors(name: string) {
+    const parents: Record<string, Ref[]> = {}, children: Record<string, Ref[]> = {};
+    const self: Ref[] = [];
+    for (const r of model?.refs ?? []) {
+      if (S?.filter === 'real' && r.kind === 'logical') continue;
       if (r.child.table === name) {
         if (r.self) { self.push(r); continue; }
         (parents[r.parent.table] = parents[r.parent.table] || []).push(r);
@@ -27,7 +54,7 @@ export const Focus = (() => {
   }
 
   function junctionTag(other, focus) {
-    const j = sem.junctions[other];
+    const j = SEM().junctions[other];
     if (j === undefined) return '';
     if (j === null) return 'N:M multi';
     const oe = j[0] === focus ? j[1] : j[1] === focus ? j[0] : '';
@@ -37,7 +64,7 @@ export const Focus = (() => {
   // onDelete 액션 칩 — 원문 문자열 표기, 미지정은 무칩. 실패 조건(NOT NULL set null,
   // default 없는 set default) 감지 시에만 ⚠ 부가. 논리 ref는 저강조 + DB 미전파 캐빗.
   function odcChip(r) {
-    const od = sem.refMeta[r.id].onDelete;
+    const od = SEM().refMeta[r.id].onDelete;
     if (!od.specified) return '';
     const t = byName().get(r.child.table);
     const fkCols = t ? t.cols.filter((c) => r.child.cols.includes(c.name)) : [];
@@ -52,7 +79,7 @@ export const Focus = (() => {
 
   // 툴팁 문장에 부가하는 삭제 동작 한 절 (onUpdate는 여기에만 노출)
   function actClause(r) {
-    const m = sem.refMeta[r.id], od = m.onDelete, ou = m.onUpdate;
+    const m = SEM().refMeta[r.id], od = m.onDelete, ou = m.onUpdate;
     const WORDS = {
       'cascade': '부모 삭제 시 함께 삭제', 'set null': '부모 삭제 시 NULL 전환',
       'set default': '부모 삭제 시 기본값 전환', 'restrict': '부모 삭제 차단',
@@ -64,7 +91,7 @@ export const Focus = (() => {
   }
 
   function relLine(r) {
-    const m = sem.refMeta[r.id], ty = sem.TYPES[m.type];
+    const m = SEM().refMeta[r.id], ty = SEM().TYPES[m.type];
     const lab = m.label === ty.label ? '' : `<b class="rm">${esc(m.label)}</b>`;
     return `<span data-ref="${esc(r.id)}" data-col="${esc(r.child.cols[0])}" title="${esc(m.sentence + actClause(r))}">${lab}<span class="ty" style="--c:var(${ty.cssVar})">${ty.label}</span><span class="cardchip">${m.card}</span>${odcChip(r)}<em>${esc(r.child.cols[0])}</em></span>`;
   }
@@ -72,15 +99,15 @@ export const Focus = (() => {
   let lastImpact = null; // 영향권 모드 중 현재 포커스의 deleteImpact 결과
 
   function toggleImpact() {
-    S.impact = !S.impact;
-    render(S.focusTable);
+    ST().impact = !ST().impact;
+    render(ST().focusTable);
   }
 
   // ── 2-hop 미리보기(.fx) — 카드 형제 인라인 확장, 수동 peek은 동시 1개 ──
   function onwardCount(other) {
     const nb = neighbors(other);
     const s = new Set([...Object.keys(nb.parents), ...Object.keys(nb.children)]);
-    s.delete(S.focusTable); s.delete(other);
+    s.delete(ST().focusTable); s.delete(other);
     return s.size;
   }
 
@@ -88,23 +115,23 @@ export const Focus = (() => {
     const panel = document.createElement('div');
     panel.className = 'fx';
     const nb = neighbors(name);
-    const TYPE_ORDER = Object.keys(sem.TYPES);
+    const TYPE_ORDER = Object.keys(SEM().TYPES);
     const rows = [];
     // ▶ = name이 참조하는 대상, ◀ = name을 참조하는 대상. 현재 포커스로 되돌아가는 엣지는 제외.
-    for (const p in nb.parents) if (p !== S.focusTable)
-      for (const r2 of nb.parents[p]) rows.push({ r: r2, dir: '▶', other: p, ti: Math.max(0, TYPE_ORDER.indexOf(sem.refMeta[r2.id].type)) });
-    for (const c in nb.children) if (c !== S.focusTable)
-      for (const r2 of nb.children[c]) rows.push({ r: r2, dir: '◀', other: c, ti: Math.max(0, TYPE_ORDER.indexOf(sem.refMeta[r2.id].type)) });
+    for (const p in nb.parents) if (p !== ST().focusTable)
+      for (const r2 of nb.parents[p]) rows.push({ r: r2, dir: '▶', other: p, ti: Math.max(0, TYPE_ORDER.indexOf(SEM().refMeta[r2.id].type)) });
+    for (const c in nb.children) if (c !== ST().focusTable)
+      for (const r2 of nb.children[c]) rows.push({ r: r2, dir: '◀', other: c, ti: Math.max(0, TYPE_ORDER.indexOf(SEM().refMeta[r2.id].type)) });
     rows.sort((a, b) => a.ti - b.ti || a.other.localeCompare(b.other));
     const shown = rows.slice(0, 6);
     panel.innerHTML = shown.map(({ r: r2, dir, other }) => {
-      const m = sem.refMeta[r2.id], ty = sem.TYPES[m.type];
+      const m = SEM().refMeta[r2.id], ty = SEM().TYPES[m.type];
       return `<button type="button" class="fxrow" data-goto="${esc(other)}" title="${esc(m.sentence + actClause(r2))}">` +
         `<i>${dir}</i><span class="ty" style="--c:var(${ty.cssVar})">${ty.label}</span><b>${esc(other)}</b>` +
         `<span class="cardchip">${m.card}</span>${odcChip(r2)}</button>`;
     }).join('') + (rows.length > 6 ? `<div class="fxmore">+ ${rows.length - 6} — 포커스로 이동해 보기</div>` : '');
-    panel.querySelectorAll('.fxrow').forEach((b) =>
-      b.addEventListener('click', () => cb.go(b.dataset.goto)));
+    panel.querySelectorAll<HTMLElement>('.fxrow').forEach((b) =>
+      b.addEventListener('click', () => cb?.go(b.dataset.goto)));
     return panel;
   }
 
@@ -119,7 +146,7 @@ export const Focus = (() => {
   }
 
   function togglePeek(card, focusFirst) {
-    if (S.impact) return; // 영향권 모드의 .fx 슬롯은 체인이 소유(모드 파생·다중) — 수동 peek 비활성
+    if (ST().impact) return; // 영향권 모드의 .fx 슬롯은 체인이 소유(모드 파생·다중) — 수동 peek 비활성
     const wrap = card.parentElement;
     if (!wrap || !wrap.classList.contains('fitem')) return;
     const wasOpen = !!wrap.querySelector('.fx');
@@ -141,7 +168,7 @@ export const Focus = (() => {
     const card = document.querySelector(`#focuswrap .fnode[data-name="${CSS.escape(name)}"]`);
     if (!card) return false;
     if (card.classList.contains('fmore-hidden'))
-      card.closest('.fcol').querySelectorAll('button.fmore').forEach((b) => b.click());
+      card.closest('.fcol').querySelectorAll<HTMLElement>('button.fmore').forEach((b) => b.click());
     togglePeek(card, false);
     return true;
   }
@@ -150,52 +177,52 @@ export const Focus = (() => {
   // 이동은 셸 레벨(클릭·Enter), 내부 버튼에서 버블된 클릭은 이동으로 취급하지 않는다.
   function nodeCard(other, edges) {
     const t = byName().get(other);
-    const gv = S.groupColor[t && t.group] || '--gc-x';
+    const gv = ST().groupColor[t && t.group] || '--gc-x';
     const elB = document.createElement('div');
     elB.className = 'fnode'; elB.dataset.name = other;
     elB.tabIndex = -1;
     elB.setAttribute('role', 'option');
     elB.setAttribute('aria-label', other);
     elB.style.setProperty('--gc', `var(${gv})`);
-    const jt = junctionTag(other, S.focusTable);
+    const jt = junctionTag(other, ST().focusTable);
     // 조인테이블이면 반대편으로 바로 건너뛰는 링크 — 경유지 2클릭을 1클릭으로
-    const j = sem.junctions[other];
-    const far = Array.isArray(j) ? (j[0] === S.focusTable ? j[1] : j[1] === S.focusTable ? j[0] : '') : '';
-    const onwardN = S.impact ? 0 : onwardCount(other); // 영향권 모드에선 .fx 슬롯을 체인이 사용
+    const j = SEM().junctions[other];
+    const far = Array.isArray(j) ? (j[0] === ST().focusTable ? j[1] : j[1] === ST().focusTable ? j[0] : '') : '';
+    const onwardN = ST().impact ? 0 : onwardCount(other); // 영향권 모드에선 .fx 슬롯을 체인이 사용
     elB.innerHTML =
       `<span class="nname">${esc(other)}${jt ? `<span class="nm-tag">${esc(jt)}</span>` : ''}</span>` +
       `<span class="nmean">${esc((t && t.note) || '')}</span>` +
       `<span class="nrel">${edges.map(relLine).join('')}</span>` +
       (onwardN ? `<button type="button" class="fxbtn" aria-expanded="false">⌄ 다음 관계 ${onwardN}</button>` : '') +
       (far && far !== other ? `<button type="button" class="fskip">↔ ${esc(far)} 바로가기</button>` : '');
-    elB.addEventListener('click', (e) => { if (e.target.closest('button')) return; cb.go(other); });
+    elB.addEventListener('click', (e) => { if (e.target.closest('button')) return; cb?.go(other); });
     elB.addEventListener('pointerenter', () => setHot(other, null, true));
     elB.addEventListener('pointerleave', () => setHot(null, null, false));
     elB.addEventListener('focus', () => setHot(other, null, true));
     elB.addEventListener('blur', () => setHot(null, null, false));
     // 관계가 2개 이상이면 카드 안 via 행이 2차 정거장 — 행 단위 hot (우열만 와이어가 행 단위)
-    const rows = elB.querySelectorAll('.nrel > span');
+    const rows = elB.querySelectorAll<HTMLElement>('.nrel > span');
     if (rows.length >= 2) rows.forEach((sp) => {
       sp.tabIndex = -1;
       sp.addEventListener('focus', () => setHot(other, elB.closest('#fcolR') ? sp.dataset.col : null, true));
       sp.addEventListener('blur', () => setHot(null, null, false));
     });
     const skip = elB.querySelector('.fskip');
-    if (skip) skip.addEventListener('click', () => cb.go(far));
+    if (skip) skip.addEventListener('click', () => cb?.go(far));
     const fxb = elB.querySelector('.fxbtn');
     if (fxb) fxb.addEventListener('click', () => togglePeek(elB, false));
     return elB;
   }
 
   function focusCard(t) {
-    const gv = S.groupColor[t.group] || '--gc-x';
+    const gv = ST().groupColor[t.group] || '--gc-x';
     const div = document.createElement('div');
     div.className = 'ffocus'; div.style.setProperty('--gc', `var(${gv})`);
-    const passesFilter = (r) => S.filter !== 'real' || r.kind === 'real';
-    const selfRef = model.refs.find((r) => r.self && r.child.table === t.name && passesFilter(r));
+    const passesFilter = (r) => ST().filter !== 'real' || r.kind === 'real';
+    const selfRef = M().refs.find((r) => r.self && r.child.table === t.name && passesFilter(r));
     // ERD와 같은 규칙으로 컬럼 필터 — 키만: PK/UNIQUE/FK 멤버
-    const fkColsAll = new Set(model.refs.filter((r) => r.child.table === t.name && passesFilter(r)).flatMap((r) => r.child.cols));
-    const colsShown = S.colsMode === 'all' ? t.cols : t.cols.filter((c) => c.pk || c.unique || fkColsAll.has(c.name));
+    const fkColsAll = new Set(M().refs.filter((r) => r.child.table === t.name && passesFilter(r)).flatMap((r) => r.child.cols));
+    const colsShown = ST().colsMode === 'all' ? t.cols : t.cols.filter((c) => c.pk || c.unique || fkColsAll.has(c.name));
     const hiddenN = t.cols.length - colsShown.length;
     let rows = '';
     for (const c of colsShown) {
@@ -204,11 +231,11 @@ export const Focus = (() => {
       if (c.pk) b += '<span class="badge pk">PK</span>';
       if (c.unique) b += '<span class="badge uq">UQ</span>';
       // 이 컬럼이 선두인 ref를 우선, 없으면 복합 FK의 후행 멤버 여부 확인
-      const ref = model.refs.find((r) => r.child.table === t.name && r.child.cols[0] === c.name && passesFilter(r));
-      const memberRef = !ref && model.refs.find((r) => r.child.table === t.name && r.child.cols.includes(c.name) && passesFilter(r));
+      const ref = M().refs.find((r) => r.child.table === t.name && r.child.cols[0] === c.name && passesFilter(r));
+      const memberRef = !ref && M().refs.find((r) => r.child.table === t.name && r.child.cols.includes(c.name) && passesFilter(r));
       let cell;
       if (ref) {
-        const m = sem.refMeta[ref.id], ty = sem.TYPES[m.type];
+        const m = SEM().refMeta[ref.id], ty = SEM().TYPES[m.type];
         const tychip = `<span class="ty" style="--c:var(${ty.cssVar})">${ty.label}</span>`;
         if (ref.self) cell = `<span class="fkcell">${tychip}${odcChip(ref)}<span class="fk self">⟲ ${esc(m.label)}</span></span>`;
         else {
@@ -227,11 +254,11 @@ export const Focus = (() => {
     if (hiddenN > 0) rows += `<div class="col-row cmore">… ${hiddenN}개 컬럼 더 (전체 컬럼으로 보기)</div>`;
     const nb = neighbors(t.name);
     const nc = Object.keys(nb.children).length, np = Object.keys(nb.parents).length;
-    const j = sem.junctions[t.name];
+    const j = SEM().junctions[t.name];
     const jb = j !== undefined ? `<span class="f-nm">${j === null ? 'N:M multi 링크' : `N:M 연결 · ${esc(j[0])} ↔ ${esc(j[1])}`}</span>` : '';
     // 영향권 요약 — 거부권 우선, 보장/앱 레벨 분리 (n = dedupe 테이블 수)
     let impactHtml = '';
-    if (S.impact && lastImpact) {
+    if (ST().impact && lastImpact) {
       const sm = lastImpact.summary, v = lastImpact.vetoed;
       const cnt = (fn) => v.filter(fn).length;
       const restrictN = cnt((x) => x.reason !== 'unspecified' && x.reason !== 'not-null');
@@ -258,15 +285,15 @@ export const Focus = (() => {
       `${t.note ? `<div class="f-note">${esc(t.note)}</div>` : ''}` +
       `<div class="f-cols">${rows}</div>` +
       `<div class="f-foot"><span>피참조 <b>${nc}</b></span><span>참조 <b>${np}</b></span><span>컬럼 <b>${t.cols.length}</b></span>` +
-      `<button type="button" class="fimpact" aria-pressed="${!!S.impact}">삭제 영향</button></div>`;
+      `<button type="button" class="fimpact" aria-pressed="${!!ST().impact}">삭제 영향</button></div>`;
     div.querySelector('.fimpact').addEventListener('click', toggleImpact);
     div.tabIndex = -1; // 키보드 홈 위치
-    div.querySelectorAll('.fk[data-goto]').forEach((a) =>
-      a.addEventListener('click', (e) => { e.stopPropagation(); cb.go(a.dataset.goto); }));
+    div.querySelectorAll<HTMLElement>('.fk[data-goto]').forEach((a) =>
+      a.addEventListener('click', (e) => { e.stopPropagation(); cb?.go(a.dataset.goto); }));
     // FK 행 hover/focus → 대응 와이어·이웃 카드 하이라이트 (키보드 커서 = hover)
-    div.querySelectorAll('.col-row').forEach((row) => {
+    div.querySelectorAll<HTMLElement>('.col-row').forEach((row) => {
       const col = row.dataset.col;
-      if (!model.refs.some((r) => r.child.table === t.name && r.child.cols[0] === col && !r.self)) return;
+      if (!M().refs.some((r) => r.child.table === t.name && r.child.cols[0] === col && !r.self)) return;
       row.tabIndex = -1;
       row.addEventListener('pointerenter', () => setHot(null, col, true));
       row.addEventListener('pointerleave', () => setHot(null, null, false));
@@ -285,12 +312,12 @@ export const Focus = (() => {
   function stationsOf(colEl) {
     // 1차 정거장 = 카드 셸(+fmore 버튼), 관계 2개 이상 카드는 via 행, 열린 .fx는 그 행들이 뒤따름
     const out = [];
-    for (const el of colEl.querySelectorAll('.fnode:not(.fmore-hidden), button.fmore')) {
+    for (const el of colEl.querySelectorAll<HTMLElement>('.fnode:not(.fmore-hidden), button.fmore')) {
       out.push(el);
       if (el.classList.contains('fnode')) {
-        el.querySelectorAll('.nrel > span[tabindex]').forEach((r) => out.push(r));
+        el.querySelectorAll<HTMLElement>('.nrel > span[tabindex]').forEach((r) => out.push(r));
         const fx = el.parentElement && el.parentElement.querySelector('.fx');
-        if (fx) fx.querySelectorAll('.fxrow').forEach((r) => out.push(r));
+        if (fx) fx.querySelectorAll<HTMLElement>('.fxrow').forEach((r) => out.push(r));
       }
     }
     return out;
@@ -310,7 +337,7 @@ export const Focus = (() => {
     if ((k === 'Enter' || k === ' ') && a && a.closest && a.closest('button')) return false;
 
     if (k === 'Backspace' || (k === 'ArrowLeft' && e.altKey)) {
-      if (cb.back) { e.preventDefault(); cb.back(); return true; }
+      if (cb?.back) { e.preventDefault(); cb.back(); return true; }
       return false;
     }
 
@@ -318,7 +345,7 @@ export const Focus = (() => {
       if (e.shiftKey) return false; // Shift+Esc = 즉시 ERD (상위 계층으로 통과)
       // 겹 벗기기: 열린 .fx 닫기 → 영향권 모드 해제 → (상위) ERD 복귀
       if (closePeek()) { drawWires(); return true; }
-      if (S.impact) { toggleImpact(); return true; }
+      if (ST().impact) { toggleImpact(); return true; }
       return false;
     }
 
@@ -338,7 +365,7 @@ export const Focus = (() => {
       let list;
       if (side) list = stationsOf(side);
       else {
-        list = home ? [home, ...home.querySelectorAll('.col-row[tabindex]')] : [];
+        list = home ? [home, ...home.querySelectorAll<HTMLElement>('.col-row[tabindex]')] : [];
       }
       const idx = list.indexOf(a);
       if (idx === -1) return focusEl(list[0] || home);
@@ -387,10 +414,10 @@ export const Focus = (() => {
     if (k === 'Enter') {
       if (!inWrap) return false;
       const card = a.closest && a.closest('.fnode');
-      if (card) { cb.go(card.dataset.name); return true; }
+      if (card) { cb?.go(card.dataset.name); return true; }
       if (a.classList.contains('col-row')) {
         const link = a.querySelector('.fk[data-goto]');
-        if (link) cb.go(link.dataset.goto);
+        if (link) cb?.go(link.dataset.goto);
         return true;
       }
       return a.classList.contains('ffocus'); // 홈에서 Enter는 무동작 소비
@@ -411,7 +438,7 @@ export const Focus = (() => {
       `<span class="odc ${cls}${en.kind === 'logical' ? ' lg' : ''}">${esc(lbl)}</span>` +
       (en.warning ? '<em>⚠</em>' : '') + (en.cycle ? '<em>⟲ 재귀</em>' : '') + (en.dedup ? '<em>중복 경로</em>' : '');
     b.title = `${en.table} — ${Semantics.ACTIONS[en.action].label}${en.guaranteed ? '' : ' (앱 레벨 — DB 보장 없음)'}${en.warning ? ' · ' + en.warning : ''}`;
-    b.addEventListener('click', () => cb.go(b.dataset.goto));
+    b.addEventListener('click', () => cb?.go(b.dataset.goto));
     return b;
   }
   function countDesc(entries) {
@@ -448,7 +475,7 @@ export const Focus = (() => {
       colEl.innerHTML = '<div class="empty">이 테이블을 참조하는 FK 없음 — 삭제 영향 없음</div>';
       return;
     }
-    const refById = new Map(model.refs.map((r) => [r.id, r]));
+    const refById = new Map(M().refs.map((r) => [r.id, r]));
     const CATS = [
       { label: '연쇄 삭제', cssVar: '--act-cascade', test: (en) => en.kind === 'real' && en.action === 'cascade' },
       { label: 'NULL 전환', cssVar: '--act-setnull', test: (en) => en.kind === 'real' && en.action === 'set null' && !en.veto },
@@ -498,17 +525,17 @@ export const Focus = (() => {
   function setHot(other, col, on) {
     const wires = $('fwires');
     wires.classList.toggle('dim', on);
-    wires.querySelectorAll('g.fw').forEach((g) => {
+    wires.querySelectorAll<HTMLElement>('g.fw').forEach((g) => {
       g.classList.toggle('hot', on && (!other || g.dataset.other === other) && (!col || g.dataset.col === col));
     });
-    document.querySelectorAll('#focuswrap .fnode.hot').forEach((n) => n.classList.remove('hot'));
+    document.querySelectorAll<HTMLElement>('#focuswrap .fnode.hot').forEach((n) => n.classList.remove('hot'));
     if (on && other) {
       const n = document.querySelector(`#focuswrap .fnode[data-name="${CSS.escape(other)}"]`);
       if (n) n.classList.add('hot');
     }
     const fe = $('fcolM').querySelector('.ffocus');
     if (fe) {
-      fe.querySelectorAll('.col-row.hot').forEach((r2) => r2.classList.remove('hot'));
+      fe.querySelectorAll<HTMLElement>('.col-row.hot').forEach((r2) => r2.classList.remove('hot'));
       if (on && col) {
         const r2 = fe.querySelector(`.col-row[data-col="${CSS.escape(col)}"]`);
         if (r2) r2.classList.add('hot');
@@ -539,7 +566,7 @@ export const Focus = (() => {
     };
     // 관계(엣지) 하나 = 와이어 하나. 기본은 중립색, hover/hot 시 유형색으로 강조(dbdiagram 문법).
     const mk = (a, b2, ay, by, ref, info, cls) => {
-      const m = sem.refMeta[ref.id], cvar = sem.TYPES[m.type].cssVar;
+      const m = SEM().refMeta[ref.id], cvar = SEM().TYPES[m.type].cssVar;
       const g = mkNS('g', { class: 'fw' + (cls ? ' ' + cls : '') });
       g.style.setProperty('--c', `var(${cvar})`);
       g.dataset.other = info.other; g.dataset.col = info.col || '';
@@ -555,15 +582,15 @@ export const Focus = (() => {
       const hit = mkNS('path', { d, class: 'hit' });
       hit.addEventListener('pointerenter', (e) => {
         setHot(info.other, info.col, true);
-        if (cb.tooltip) cb.tooltip.show(`<b>${esc(m.label)}</b> — ${esc(m.sentence + actClause(ref))}`, e.clientX, e.clientY);
+        if (cb?.tooltip) cb?.tooltip.show(`<b>${esc(m.label)}</b> — ${esc(m.sentence + actClause(ref))}`, e.clientX, e.clientY);
       });
-      hit.addEventListener('pointermove', (e) => { if (cb.tooltip) cb.tooltip.move(e.clientX, e.clientY); });
-      hit.addEventListener('pointerleave', () => { setHot(null, null, false); if (cb.tooltip) cb.tooltip.hide(); });
+      hit.addEventListener('pointermove', (e) => { if (cb?.tooltip) cb?.tooltip.move(e.clientX, e.clientY); });
+      hit.addEventListener('pointerleave', () => { setHot(null, null, false); if (cb?.tooltip) cb?.tooltip.hide(); });
       g.appendChild(hit);
       wires.appendChild(g);
     };
     // 좌열(피참조): 카드당 1선 — 포커스 카드의 피참조 컬럼 행(대개 id)으로 팬인
-    $('fcolL').querySelectorAll('.fnode').forEach((nd) => {
+    $('fcolL').querySelectorAll<HTMLElement>('.fnode').forEach((nd) => {
       if (!nd.offsetParent) return; // 접힌 카드 스킵
       const name = nd.dataset.name;
       let edges = childrenEdges[name] || [];
@@ -579,7 +606,7 @@ export const Focus = (() => {
       mk(b.r, F.l, b.cy, ay != null ? ay : clamp(b.cy, F.t + 12, F.b - 12), rep, { other: name, col: '' });
     });
     // 우열(참조): 엣지당 1선 — 포커스 카드의 실제 FK 컬럼 행에서 출발, 같은 카드 도착은 스프레드
-    $('fcolR').querySelectorAll('.fnode').forEach((nd) => {
+    $('fcolR').querySelectorAll<HTMLElement>('.fnode').forEach((nd) => {
       if (!nd.offsetParent) return;
       const name = nd.dataset.name, edges = parentsEdges[name] || [];
       const b = pt(nd, st);
@@ -591,7 +618,7 @@ export const Focus = (() => {
     });
   }
 
-  function render(name) {
+  async function render(name: string): Promise<void> {
     const t = byName().get(name);
     const L = $('fcolL'), M = $('fcolM'), R = $('fcolR');
     // 재렌더 전 커서 서술자 보존(인스턴스 키 우선) — 재구축 후 복원, 소멸 시 중앙 폴백
@@ -615,18 +642,18 @@ export const Focus = (() => {
       M.innerHTML = `<div class="empty">「${esc(name || '')}」 — 존재하지 않는 테이블</div>`;
       return Promise.resolve();
     }
-    S.focusTable = name;
+    ST().focusTable = name;
     const nb = neighbors(name);
     childrenEdges = nb.children; parentsEdges = nb.parents;
-    lastImpact = S.impact ? Semantics.deleteImpact(model, name) : null;
-    $('focuswrap').classList.toggle('impact', !!S.impact);
+    lastImpact = ST().impact ? Semantics.deleteImpact(model, name) : null;
+    $('focuswrap').classList.toggle('impact', !!ST().impact);
     const ck = Object.keys(nb.children).sort(), pk = Object.keys(nb.parents).sort();
     // 좌열: 관계 유형 순 섹션 + 색 헤더, 섹션당 6개 초과분은 접기
-    const TYPE_ORDER = Object.keys(sem.TYPES);
+    const TYPE_ORDER = Object.keys(SEM().TYPES);
     const fillLeft = (colEl, map) => {
       const list = Object.keys(map).map((o) => ({
         other: o, edges: map[o],
-        ti: Math.max(0, TYPE_ORDER.indexOf(sem.refMeta[map[o][0].id].type)),
+        ti: Math.max(0, TYPE_ORDER.indexOf(SEM().refMeta[map[o][0].id].type)),
       })).sort((a, b) => a.ti - b.ti || b.edges.length - a.edges.length || a.other.localeCompare(b.other));
       if (!list.length) { colEl.innerHTML = '<div class="empty">— 없음 —</div>'; return; }
       const sections = [];
@@ -635,7 +662,7 @@ export const Focus = (() => {
         sections[sections.length - 1].items.push(it);
       }
       for (const sec of sections) {
-        const ty = sem.TYPES[TYPE_ORDER[sec.ti]];
+        const ty = SEM().TYPES[TYPE_ORDER[sec.ti]];
         const hd = document.createElement('div');
         hd.className = 'f-typehead';
         hd.innerHTML = `<span class="ty" style="--c:var(${ty.cssVar})">${ty.label}</span>` +
@@ -680,7 +707,7 @@ export const Focus = (() => {
         colEl.appendChild(wrap);
       }
     };
-    if (S.impact) fillImpact(L, lastImpact);
+    if (ST().impact) fillImpact(L, lastImpact);
     else fillLeft(L, nb.children);
     M.appendChild(focusCard(t));
     fillRight(R, nb.parents);
@@ -717,7 +744,7 @@ export const Focus = (() => {
   }
 
   return {
-    init(m, s, state, callbacks) { model = m; sem = s; S = state; cb = callbacks; },
+    init(m: Model, s: Analysis, state: AppState, callbacks: Callbacks): void { model = m; sem = s; S = state; cb = callbacks; },
     render, drawWires, onKey, isEditableTarget, openPeek,
   };
 })();

@@ -27,10 +27,5 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": ["src", "main.ts", "preload.ts", "renderer", "scripts"],
-  // 렌더러 네 파일은 모듈 구조만 옮긴 상태이고 타입 주석이 아직 안 붙었다.
-  // 붙는 대로 하나씩 이 목록에서 뺀다 — 그때까지는 스크린샷 비교가 이 파일들의 안전망이다.
-  "exclude": [
-    "node_modules", "out", "dist", "renderer/bundle.js",
-    "renderer/app.ts", "renderer/erd.ts", "renderer/focus.ts", "renderer/compare.ts"
-  ]
+  "exclude": ["node_modules", "out", "dist", "renderer/bundle.js"]
 }
