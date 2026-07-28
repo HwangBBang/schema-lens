@@ -13,6 +13,7 @@ import { gitBaseline, isFailure } from '../src/git-baseline.ts';
 import type { Column } from '../src/model.ts';
 import type { ImpactEntry } from '../src/semantics.ts';
 import type { TableDiff } from '../src/diff.ts';
+import { columnFacts } from '../src/column-facts.ts';
 
 // 빌드 산출물(out/scripts/)에서 실행되므로 저장소 루트를 거슬러 올라가 잡는다
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -614,6 +615,77 @@ check('컬럼 순서는 원본을 따른다', t(() => {
   const cols = [col({ name: 'a', unique: true }), col({ name: 'b' }), col({ name: 'c', unique: true })];
   const v = visibleCols(cols, tdOf({ b: 'changed' }), { max: 12 });
   return v.join(',') === 'a,b,c';
+}));
+
+// ---- 컬럼 사실 수집(column-facts) ----
+check('없는 테이블/컬럼은 null', t(() =>
+  columnFacts(model, 'no_such_table', 'id') === null &&
+  columnFacts(model, 'users', 'no_such_col') === null));
+
+check('PK 컬럼의 기본값을 읽는다', t(() => {
+  const f = columnFacts(model, 'users', 'id');
+  return !!f && f.column.pk && f.column.notNull && f.column.dflt === 'gen_random_uuid()';
+}));
+
+check('unique 컬럼은 복합 UNIQUE로 세지 않는다', t(() => {
+  const f = columnFacts(model, 'users', 'email');
+  return !!f && f.column.unique && f.compositeUnique.length === 0 && f.fk === null;
+}));
+
+check('ref 없는 컬럼도 note는 살아 있다', t(() => {
+  const f = columnFacts(model, 'users', 'workspace_id');
+  return !!f && f.fk === null && /workspaces\.id/.test(f.column.note || '');
+}));
+
+check('선두 FK 컬럼은 role=lead', t(() => {
+  const f = columnFacts(model, 'repos', 'owner_id');
+  return !!f && f.fk?.role === 'lead' && f.fk.ref.parent.table === 'users';
+}));
+
+check('복합 FK의 후행 멤버는 role=member', t(() => {
+  const mo = parseDbml(`Table p {
+  a int
+  b int
+  indexes { (a, b) [pk] }
+}
+Table c {
+  x int
+  y int
+}
+Ref: c.(x, y) > p.(a, b)`);
+  const lead = columnFacts(mo, 'c', 'x');
+  const mem = columnFacts(mo, 'c', 'y');
+  return lead?.fk?.role === 'lead' && mem?.fk?.role === 'member' &&
+    mem?.fk?.ref.parent.table === 'p';
+}));
+
+check('복합 UNIQUE 소속을 컬럼별로 찾는다', t(() => {
+  const mo = parseDbml(`Table t {
+  a int
+  b int
+  c int
+  indexes { (a, b) [unique] }
+}`);
+  const fa = columnFacts(mo, 't', 'a');
+  const fc = columnFacts(mo, 't', 'c');
+  return fa?.compositeUnique.length === 1 && fa.compositeUnique[0]?.join(',') === 'a,b' &&
+    fc?.compositeUnique.length === 0;
+}));
+
+check('타입 이름이 enum과 같으면 정의를 붙인다', t(() => {
+  const mo = parseDbml(`Enum st {
+  OPEN
+  CLOSED
+}
+Table t {
+  id int [pk]
+  s st
+  plain varchar(20)
+}`);
+  const fs2 = columnFacts(mo, 't', 's');
+  const fp = columnFacts(mo, 't', 'plain');
+  return fs2?.enumDef?.name === 'st' && fs2.enumDef.values.length === 2 &&
+    fs2.enumDef.values[0]?.name === 'OPEN' && fp?.enumDef === null;
 }));
 
 // ---- git 기준본 읽기 ----
