@@ -70,6 +70,9 @@ schema-lens addresses this in three ways:
 - Wheel = pan, `⌘`/`Ctrl` + wheel = zoom · drag tables, or drag a group hull to move the whole cluster
 - Layout edits persist per file (`View > Reset Layout` to discard)
 - Minimap with viewport indicator — click or drag it to jump
+- Hovering a column row or a folded-hub chip opens a detail tooltip after a short delay —
+  full column name and type, nullability, default, note, enum values, composite unique
+  membership, and the relationship behind an FK column
 
 **Focus mode**
 - Three-column view of a single table: referencing tables on the left (the N side),
@@ -150,7 +153,8 @@ Renders, captures, and exits without interaction — useful for visual regressio
 
 ```bash
 npx electron . <file> --screenshot out.png [--focus TABLE] [--theme light|dark] \
-  [--side open|closed] [--layout group|lr|tb|grid] [--impact] [--peek TABLE]
+  [--side open|closed] [--layout group|lr|tb|grid] [--impact] [--peek TABLE] \
+  [--tip TABLE.COLUMN] [--tip-hub TABLE:HUB]
 ```
 
 On parse failure it captures the error screen and exits with code 2. `--focus`,
@@ -168,6 +172,12 @@ code 1 otherwise):
 `--diff` opens the compare view (last commit vs working copy). It needs no `--focus`. If the
 baseline cannot be read (not a repository, file never committed) the run exits with code 2 —
 the same fail-fast rule as `--peek`, so a broken path never passes silently.
+
+`--tip TABLE.COLUMN` and `--tip-hub TABLE:HUB` capture with a hover tooltip forced open
+(hover state can't be reproduced any other way). The two flags are mutually exclusive, and
+both only work in the full ERD view. Table names can contain dots, so `--tip` splits table
+and column at the **last** dot. If the target column is folded away under "키만" mode the
+run exits with code 2, so pass `--cols all` alongside it.
 
 `--cols keys|all` overrides the column-display toggle for that run, in either view.
 

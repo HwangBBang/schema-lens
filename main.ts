@@ -5,7 +5,7 @@ import { importer } from '@dbml/core';
 import { parseDbml, parseDbmlFile } from './src/parse.ts';
 import { gitBaseline, isFailure } from './src/git-baseline.ts';
 
-// CLI: electron . [file.dbml] [--screenshot out.png] [--focus table] [--theme light|dark] [--side open|closed] [--layout group|lr|tb|grid] [--peek table] [--impact] [--view library|extract] [--diff] [--cols keys|all]
+// CLI: electron . [file.dbml] [--screenshot out.png] [--focus table] [--theme light|dark] [--side open|closed] [--layout group|lr|tb|grid] [--peek table] [--impact] [--view library|extract] [--diff] [--cols keys|all] [--tip TABLE.COLUMN] [--tip-hub TABLE:HUB]
 const argv = process.argv.slice(app.isPackaged ? 1 : 2);
 
 type Cli = {
@@ -20,6 +20,8 @@ type Cli = {
   view: string | null;
   diff: boolean;
   cols: string | null;
+  tip: string | null;
+  tipHub: string | null;
 };
 
 /** 라이브러리 카드 한 장 — userData/library.json에 그대로 저장된다 */
@@ -33,7 +35,7 @@ type LibEntry = {
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-const cli: Cli = { file: null, screenshot: null, focus: null, theme: null, side: null, layout: null, peek: null, impact: false, view: null, diff: false, cols: null };
+const cli: Cli = { file: null, screenshot: null, focus: null, theme: null, side: null, layout: null, peek: null, impact: false, view: null, diff: false, cols: null, tip: null, tipHub: null };
 for (let i = 0; i < argv.length; i++) {
   const next = (): string | null => argv[++i] ?? null;
   if (argv[i] === '--screenshot') cli.screenshot = next();
@@ -46,11 +48,18 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === '--view') cli.view = next();
   else if (argv[i] === '--diff') cli.diff = true;
   else if (argv[i] === '--cols') cli.cols = next();
+  else if (argv[i] === '--tip') cli.tip = next();
+  else if (argv[i] === '--tip-hub') cli.tipHub = next();
   else if (!argv[i]?.startsWith('-')) cli.file = argv[i] ?? null;
 }
 // --peek/--impact는 명시적 --focus 필수 — 역산 금지, 즉시 실패 (검증 스크린샷의 결정성)
 if ((cli.peek || cli.impact) && !cli.focus) {
   console.error('--peek/--impact requires an explicit --focus <table>');
+  process.exit(1);
+}
+// --tip과 --tip-hub는 동시에 쓸 수 없다 — 툴팁은 한 번에 하나만 뜬다
+if (cli.tip && cli.tipHub) {
+  console.error('--tip and --tip-hub are mutually exclusive');
   process.exit(1);
 }
 
@@ -96,8 +105,8 @@ function sendModel(filePath: string): void {
     rememberFile(filePath);
     libTouch(filePath, { tables: model.tables.length, refs: model.refs.length });
     watchFile(filePath);
-    win.webContents.send('model', { model, path: filePath, focus: cli.focus, theme: cli.theme, side: cli.side, layout: cli.layout, peek: cli.peek, impact: cli.impact, cols: cli.cols, diff: cli.diff, error: null });
-    cli.focus = null; cli.theme = null; cli.side = null; cli.layout = null; cli.peek = null; cli.impact = false; cli.diff = false; cli.cols = null; // 최초 1회만 적용 — 재파싱마다 리셋되지 않게
+    win.webContents.send('model', { model, path: filePath, focus: cli.focus, theme: cli.theme, side: cli.side, layout: cli.layout, peek: cli.peek, impact: cli.impact, cols: cli.cols, diff: cli.diff, tip: cli.tip, tipHub: cli.tipHub, error: null });
+    cli.focus = null; cli.theme = null; cli.side = null; cli.layout = null; cli.peek = null; cli.impact = false; cli.diff = false; cli.cols = null; cli.tip = null; cli.tipHub = null; // 최초 1회만 적용 — 재파싱마다 리셋되지 않게
     win.setTitle(`schema-lens — ${path.basename(filePath)}`);
     app.addRecentDocument(filePath);
   } catch (e) {

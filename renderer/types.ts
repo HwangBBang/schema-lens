@@ -42,6 +42,8 @@ export type ModelPayload = {
   impact: boolean;
   cols: string | null;
   diff: boolean;
+  tip: string | null;
+  tipHub: string | null;
   error: string | null;
 };
 
