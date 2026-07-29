@@ -5,6 +5,8 @@
   "main": "out/main.js",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "npm:build": "node scripts/build-npm.mjs",
+    "npm:publish": "node scripts/build-npm.mjs && npm publish dist-npm",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node out/scripts/check-model.js",
     "test:contrast": "npm run build && node out/scripts/check-contrast.js",

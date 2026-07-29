@@ -25,6 +25,9 @@ assets/icon2.png
 # electron-builder 산출물
 dist/
 
+# npm 배포용 스테이징 (scripts/build-npm.mjs 가 만든다)
+dist-npm/
+
 # 로컬 전용 — 개인 워크플로우 설정·설계 메모
 .claude/
 docs/superpowers/
