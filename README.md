@@ -23,6 +23,18 @@ right-click the app and choose **Open**, or clear the quarantine flag:
 xattr -cr /Applications/schema-lens.app
 ```
 
+**Try it with npx (any platform)** — requires Node.js 20+:
+
+```bash
+npx schema-lens                       # opens the file picker
+npx schema-lens path/to/schema.dbml   # or open a schema right away
+```
+
+This pulls in Electron (~130 MB) on first run. It is the quickest way to try
+schema-lens, but the downloaded app is not branded — macOS shows *Electron* in the
+menu bar because the app runs inside Electron's own bundle. For everyday use, prefer
+the DMG above.
+
 **Run from source (any platform)** — requires Node.js:
 
 ```bash
@@ -70,6 +82,9 @@ schema-lens addresses this in three ways:
 - Wheel = pan, `⌘`/`Ctrl` + wheel = zoom · drag tables, or drag a group hull to move the whole cluster
 - Layout edits persist per file (`View > Reset Layout` to discard)
 - Minimap with viewport indicator — click or drag it to jump
+- Hovering a column row or a folded-hub chip opens a detail tooltip after a short delay —
+  full column name and type, nullability, default, note, enum values, composite unique
+  membership, and the relationship behind an FK column
 
 **Focus mode**
 - Three-column view of a single table: referencing tables on the left (the N side),
@@ -94,6 +109,18 @@ schema-lens addresses this in three ways:
   preview the converted DBML, then save & open it in one step. Conversion runs on
   the bundled `@dbml/core` importer — no database connection required.
 
+**Compare against the last commit**
+- If the open `.dbml` lives in a git repository, **변경 비교** puts the committed schema and
+  your working copy side by side. Both panes share one layout, so the same table sits at the
+  same spot on both sides, and zoom/pan move together.
+- Added tables and columns are green, removed ones red, changed ones amber — and the same
+  rule applies to relationship lines. A column that changed is pulled out of the "keys only"
+  fold so the edit is never hidden.
+- Table color reflects the table's own definition (columns, PK, unique, group, note).
+  A relationship change colors the line, not the tables it connects.
+- Outside a repository, or before the file's first commit, the view explains why instead of
+  showing an empty canvas.
+
 **Editing workflow**
 - Open via `⌘`/`Ctrl`+`O`, drag & drop, or CLI argument; the last file is restored on launch
 - The open file is watched — edits re-parse and re-render automatically
@@ -117,6 +144,14 @@ plus inline regression fixtures. `npm run test:contrast` re-verifies palette con
 `npm run dist` builds the macOS DMG/ZIP into `dist/` (electron-builder). Releases are
 published automatically by CI when a `v*` tag is pushed.
 
+`npm run npm:build` assembles the npm package into `dist-npm/`; `npm run npm:publish`
+builds and publishes it. The npm package is staged in a separate directory rather than
+published from the repo root for two reasons: electron-builder refuses to build when
+`electron` is a production dependency, while the npm package needs exactly that; and
+without an `.npmignore`, npm falls back to `.gitignore` and drops build output the app
+needs (`renderer/bundle.js`) while shipping screenshots it does not. The file list lives
+at the top of `scripts/build-npm.mjs`.
+
 ## DBML conventions (optional)
 
 Standard DBML works out of the box. A few conventions make the diagram more precise:
@@ -138,7 +173,8 @@ Renders, captures, and exits without interaction — useful for visual regressio
 
 ```bash
 npx electron . <file> --screenshot out.png [--focus TABLE] [--theme light|dark] \
-  [--side open|closed] [--layout group|lr|tb|grid] [--impact] [--peek TABLE]
+  [--side open|closed] [--layout group|lr|tb|grid] [--impact] [--peek TABLE] \
+  [--tip TABLE.COLUMN] [--tip-hub TABLE:HUB]
 ```
 
 On parse failure it captures the error screen and exits with code 2. `--focus`,
@@ -153,9 +189,22 @@ code 1 otherwise):
   is hidden behind a collapsed "+N more" fold it is auto-expanded; if it is not a
   neighbor of the focused table at all, the run exits with code 2.
 
+`--diff` opens the compare view (last commit vs working copy). It needs no `--focus`. If the
+baseline cannot be read (not a repository, file never committed) the run exits with code 2 —
+the same fail-fast rule as `--peek`, so a broken path never passes silently.
+
+`--tip TABLE.COLUMN` and `--tip-hub TABLE:HUB` capture with a hover tooltip forced open
+(hover state can't be reproduced any other way). The two flags are mutually exclusive, and
+both only work in the full ERD view. Table names can contain dots, so `--tip` splits table
+and column at the **last** dot. If the target column is folded away under "키만" mode the
+run exits with code 2, so pass `--cols all` alongside it.
+
+`--cols keys|all` overrides the column-display toggle for that run, in either view.
+
 ```bash
 npx electron . assets/example.dbml --screenshot impact.png --focus repos --impact
 npx electron . assets/example.dbml --screenshot peek.png --focus issues --peek comments
+npx electron . path/to/schema.dbml --screenshot diff.png --diff
 ```
 
 ## Architecture

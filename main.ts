@@ -1,34 +1,74 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain } = require('electron');
-const fs = require('fs');
-const path = require('path');
-const { parseDbmlFile } = require('./src/parse');
+import { app, BrowserWindow, Menu, dialog, ipcMain } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
+import { importer } from '@dbml/core';
+import { parseDbml, parseDbmlFile } from './src/parse.ts';
+import { gitBaseline, isFailure } from './src/git-baseline.ts';
 
-// CLI: electron . [file.dbml] [--screenshot out.png] [--focus table] [--theme light|dark] [--side open|closed] [--layout group|lr|tb|grid] [--peek table] [--impact] [--view library|extract]
+// CLI: electron . [file.dbml] [--screenshot out.png] [--focus table] [--theme light|dark] [--side open|closed] [--layout group|lr|tb|grid] [--peek table] [--impact] [--view library|extract] [--diff] [--cols keys|all] [--tip TABLE.COLUMN] [--tip-hub TABLE:HUB]
 const argv = process.argv.slice(app.isPackaged ? 1 : 2);
-const cli = { file: null, screenshot: null, focus: null, theme: null, side: null, layout: null, peek: null, impact: false, view: null };
+
+type Cli = {
+  file: string | null;
+  screenshot: string | null;
+  focus: string | null;
+  theme: string | null;
+  side: string | null;
+  layout: string | null;
+  peek: string | null;
+  impact: boolean;
+  view: string | null;
+  diff: boolean;
+  cols: string | null;
+  tip: string | null;
+  tipHub: string | null;
+};
+
+/** 라이브러리 카드 한 장 — userData/library.json에 그대로 저장된다 */
+type LibEntry = {
+  name: string;
+  path: string;
+  addedAt: string;
+  lastOpenedAt?: string;
+  stats?: { tables: number; refs: number };
+};
+
+const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+const cli: Cli = { file: null, screenshot: null, focus: null, theme: null, side: null, layout: null, peek: null, impact: false, view: null, diff: false, cols: null, tip: null, tipHub: null };
 for (let i = 0; i < argv.length; i++) {
-  if (argv[i] === '--screenshot') cli.screenshot = argv[++i];
-  else if (argv[i] === '--focus') cli.focus = argv[++i];
-  else if (argv[i] === '--theme') cli.theme = argv[++i];
-  else if (argv[i] === '--side') cli.side = argv[++i];
-  else if (argv[i] === '--layout') cli.layout = argv[++i];
-  else if (argv[i] === '--peek') cli.peek = argv[++i];
+  const next = (): string | null => argv[++i] ?? null;
+  if (argv[i] === '--screenshot') cli.screenshot = next();
+  else if (argv[i] === '--focus') cli.focus = next();
+  else if (argv[i] === '--theme') cli.theme = next();
+  else if (argv[i] === '--side') cli.side = next();
+  else if (argv[i] === '--layout') cli.layout = next();
+  else if (argv[i] === '--peek') cli.peek = next();
   else if (argv[i] === '--impact') cli.impact = true;
-  else if (argv[i] === '--view') cli.view = argv[++i];
-  else if (!argv[i].startsWith('-')) cli.file = argv[i];
+  else if (argv[i] === '--view') cli.view = next();
+  else if (argv[i] === '--diff') cli.diff = true;
+  else if (argv[i] === '--cols') cli.cols = next();
+  else if (argv[i] === '--tip') cli.tip = next();
+  else if (argv[i] === '--tip-hub') cli.tipHub = next();
+  else if (!argv[i]?.startsWith('-')) cli.file = argv[i] ?? null;
 }
 // --peek/--impact는 명시적 --focus 필수 — 역산 금지, 즉시 실패 (검증 스크린샷의 결정성)
 if ((cli.peek || cli.impact) && !cli.focus) {
   console.error('--peek/--impact requires an explicit --focus <table>');
   process.exit(1);
 }
+// --tip과 --tip-hub는 동시에 쓸 수 없다 — 툴팁은 한 번에 하나만 뜬다
+if (cli.tip && cli.tipHub) {
+  console.error('--tip and --tip-hub are mutually exclusive');
+  process.exit(1);
+}
 
-let win = null;
-let currentFile = null;
-let watcher = null;
+let win: BrowserWindow | null = null;
+let currentFile: string | null = null;
+let watcher: fs.FSWatcher | null = null;
 
 const lastFileStore = () => path.join(app.getPath('userData'), 'last-file.json');
-function rememberFile(p) {
+function rememberFile(p: string): void {
   try { fs.writeFileSync(lastFileStore(), JSON.stringify({ file: p })); } catch {}
 }
 function recallFile() {
@@ -40,13 +80,13 @@ function recallFile() {
 
 // ── 스키마 라이브러리: 등록된 .dbml 파일 목록 + 메타 캐시 (SSOT는 파일 자체) ──
 const libStore = () => path.join(app.getPath('userData'), 'library.json');
-function libLoad() {
+function libLoad(): LibEntry[] {
   try { const l = JSON.parse(fs.readFileSync(libStore(), 'utf8')); return Array.isArray(l) ? l : []; } catch { return []; }
 }
-function libSave(list) {
+function libSave(list: LibEntry[]): void {
   try { fs.writeFileSync(libStore(), JSON.stringify(list, null, 2)); } catch {}
 }
-function libTouch(filePath, stats) {
+function libTouch(filePath: string, stats?: { tables: number; refs: number }): void {
   const list = libLoad();
   let e = list.find((x) => x.path === filePath);
   const now = new Date().toISOString();
@@ -57,7 +97,7 @@ function libTouch(filePath, stats) {
   libSave(list);
 }
 
-function sendModel(filePath) {
+function sendModel(filePath: string): void {
   if (!win) return;
   try {
     const model = parseDbmlFile(filePath);
@@ -65,30 +105,31 @@ function sendModel(filePath) {
     rememberFile(filePath);
     libTouch(filePath, { tables: model.tables.length, refs: model.refs.length });
     watchFile(filePath);
-    win.webContents.send('model', { model, path: filePath, focus: cli.focus, theme: cli.theme, side: cli.side, layout: cli.layout, peek: cli.peek, impact: cli.impact, error: null });
-    cli.focus = null; cli.theme = null; cli.side = null; cli.layout = null; cli.peek = null; cli.impact = false; // 최초 1회만 적용 — 재파싱마다 리셋되지 않게
+    win.webContents.send('model', { model, path: filePath, focus: cli.focus, theme: cli.theme, side: cli.side, layout: cli.layout, peek: cli.peek, impact: cli.impact, cols: cli.cols, diff: cli.diff, tip: cli.tip, tipHub: cli.tipHub, error: null });
+    cli.focus = null; cli.theme = null; cli.side = null; cli.layout = null; cli.peek = null; cli.impact = false; cli.diff = false; cli.cols = null; cli.tip = null; cli.tipHub = null; // 최초 1회만 적용 — 재파싱마다 리셋되지 않게
     win.setTitle(`schema-lens — ${path.basename(filePath)}`);
     app.addRecentDocument(filePath);
   } catch (e) {
-    win.webContents.send('model', { model: null, path: filePath, focus: null, theme: cli.theme, side: cli.side, error: String(e.message || e) });
+    win.webContents.send('model', { model: null, path: filePath, focus: null, theme: cli.theme, side: cli.side, error: errText(e) });
   }
 }
 
 // 파일이 아닌 부모 디렉토리를 감시 — 삭제 후 재생성(git checkout 등)돼도 계속 동작
-function watchFile(filePath) {
+function watchFile(filePath: string): void {
   if (watcher) { watcher.close(); watcher = null; }
   try {
-    let t = null;
+    let t: NodeJS.Timeout | null = null;
     const base = path.basename(filePath);
     watcher = fs.watch(path.dirname(filePath), (_ev, fname) => {
       if (fname && fname !== base) return;
-      clearTimeout(t);
+      if (t) clearTimeout(t);
       t = setTimeout(() => { if (fs.existsSync(filePath)) sendModel(filePath); }, 200);
     });
   } catch {}
 }
 
-async function openDialog() {
+async function openDialog(): Promise<void> {
+  if (!win) return;
   const r = await dialog.showOpenDialog(win, {
     filters: [{ name: 'DBML', extensions: ['dbml', 'txt'] }, { name: 'All', extensions: ['*'] }],
     properties: ['openFile'],
@@ -107,12 +148,12 @@ function createWindow() {
       : {}),
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
-  win.loadFile('renderer/index.html');
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html')); // out/ 에서 실행된다
   win.webContents.on('did-finish-load', () => {
     const f = currentFile || (cli.file ? path.resolve(cli.file) : recallFile());
     cli.file = null; // 이후 리로드/재생성 시 현재 파일 우선
     if (f) sendModel(f);
-    if (cli.view === 'library' || cli.view === 'extract') { // 스크린샷 검증용 세션 한정 오버라이드
+    if (win && (cli.view === 'library' || cli.view === 'extract')) { // 스크린샷 검증용 세션 한정 오버라이드
       win.webContents.send('show-view', cli.view);
       cli.view = null;
     }
@@ -138,13 +179,13 @@ ipcMain.handle('library-list', () =>
 ipcMain.handle('library-remove', (_e, p) => { libSave(libLoad().filter((x) => x.path !== p)); return true; });
 ipcMain.handle('extract-convert', (_e, { sql, dialect }) => {
   try {
-    const { importer } = require('@dbml/core');
     return { dbml: importer.import(String(sql || ''), dialect === 'mysql' ? 'mysql' : 'postgres') };
   } catch (err) {
-    return { error: String(err.message || err) };
+    return { error: errText(err) };
   }
 });
-ipcMain.handle('extract-save', async (_e, dbml) => {
+ipcMain.handle('extract-save', async (_e, dbml: string) => {
+  if (!win) return { canceled: true };
   const r = await dialog.showSaveDialog(win, {
     defaultPath: 'schema.dbml',
     filters: [{ name: 'DBML', extensions: ['dbml'] }],
@@ -155,10 +196,21 @@ ipcMain.handle('extract-save', async (_e, dbml) => {
     sendModel(r.filePath); // 저장 즉시 라이브러리 등록 + 렌더
     return { path: r.filePath };
   } catch (err) {
-    return { error: String(err.message || err) };
+    return { error: errText(err) };
+  }
+});
+// 렌더러는 DBML을 파싱할 수 없다(파서가 Node 전용) — 기준본은 여기서 모델까지 만들어 넘긴다
+ipcMain.handle('git-baseline', async () => {
+  const r = await gitBaseline(currentFile);
+  if (isFailure(r)) return r;
+  try {
+    return { model: parseDbml(r.text), sha: r.sha, subject: r.subject, when: r.when };
+  } catch (e) {
+    return { error: 'parse', message: `기준본을 읽었지만 파싱에 실패했습니다 — ${errText(e)}` };
   }
 });
 ipcMain.handle('open-sql-dialog', async () => {
+  if (!win) return null;
   const r = await dialog.showOpenDialog(win, {
     filters: [{ name: 'SQL', extensions: ['sql', 'ddl', 'txt'] }, { name: 'All', extensions: ['*'] }],
     properties: ['openFile'],
@@ -175,14 +227,14 @@ ipcMain.on('render-done', async (_e, info) => {
     console.log('screenshot saved:', path.resolve(cli.screenshot));
     app.exit(info && info.error ? 2 : 0); // 에러 화면 캡처는 비정상 코드로 구분
   } catch (e) {
-    console.error('screenshot failed:', e.message || e);
+    console.error('screenshot failed:', errText(e));
     app.exit(1);
   }
 });
 
 function buildMenu() {
-  const template = [
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
     {
       label: 'File',
       submenu: [
@@ -192,7 +244,7 @@ function buildMenu() {
         { label: '스키마 라이브러리', accelerator: 'CmdOrCtrl+L', click: () => win && win.webContents.send('show-view', 'library') },
         { label: 'SQL에서 DBML 추출…', accelerator: 'CmdOrCtrl+Shift+E', click: () => win && win.webContents.send('show-view', 'extract') },
         { type: 'separator' },
-        { role: process.platform === 'darwin' ? 'close' : 'quit' },
+        { role: process.platform === 'darwin' ? ('close' as const) : ('quit' as const) },
       ],
     },
     {
@@ -204,12 +256,22 @@ function buildMenu() {
         { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'resetZoom' },
       ],
     },
-    { role: 'editMenu' }, { role: 'windowMenu' },
+    { role: 'editMenu' as const }, { role: 'windowMenu' as const },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// 패키징된 앱은 번들이 제 아이콘을 들고 있지만, 소스 실행과 npm 설치본은 Electron 기본 번들로
+// 뜨기 때문에 Dock에 Electron 원자 아이콘이 나온다. 그 경우에만 우리 아이콘을 얹는다.
+// (메뉴바 왼쪽 위의 굵은 이름은 번들 Info.plist 에서 오는 값이라 여기서 못 바꾼다)
+function setDevDockIcon() {
+  if (process.platform !== 'darwin' || app.isPackaged || !app.dock) return;
+  const icon = path.join(__dirname, '..', 'build', 'icon.png');
+  if (fs.existsSync(icon)) app.dock.setIcon(icon);
+}
+
 app.whenReady().then(() => {
+  setDevDockIcon();
   buildMenu();
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

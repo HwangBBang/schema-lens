@@ -5,15 +5,28 @@ node_modules/
 # 스크린샷 CLI 산출물
 out*.png
 
+# 빌드 산출물 — 소스는 renderer/*.js, 실행은 이 번들이 읽힌다
+renderer/bundle.js
+renderer/bundle.js.map
+out/
+
 # 로컬 전용 — 실무 스키마와 그 파생물·회귀 (저장소에 올리지 않음)
 assets/schema.dbml
 assets/schema-reconstruction.json
 assets/reference-explorer.html
 scripts/check-local.js
+scripts/make-icon.js
 HANDOFF.md
+
+# 로컬 전용 — 심볼 디자인 레퍼런스 이미지 (남의 로고라 저장소에 올리지 않는다)
+assets/icon.webp
+assets/icon2.png
 
 # electron-builder 산출물
 dist/
+
+# npm 배포용 스테이징 (scripts/build-npm.mjs 가 만든다)
+dist-npm/
 
 # 로컬 전용 — 개인 워크플로우 설정·설계 메모
 .claude/
