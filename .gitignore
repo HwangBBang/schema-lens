@@ -15,7 +15,12 @@ assets/schema.dbml
 assets/schema-reconstruction.json
 assets/reference-explorer.html
 scripts/check-local.js
+scripts/make-icon.js
 HANDOFF.md
+
+# 로컬 전용 — 심볼 디자인 레퍼런스 이미지 (남의 로고라 저장소에 올리지 않는다)
+assets/icon.webp
+assets/icon2.png
 
 # electron-builder 산출물
 dist/
