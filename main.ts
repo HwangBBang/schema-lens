@@ -252,7 +252,17 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// 패키징된 앱은 번들이 제 아이콘을 들고 있지만, 소스 실행과 npm 설치본은 Electron 기본 번들로
+// 뜨기 때문에 Dock에 Electron 원자 아이콘이 나온다. 그 경우에만 우리 아이콘을 얹는다.
+// (메뉴바 왼쪽 위의 굵은 이름은 번들 Info.plist 에서 오는 값이라 여기서 못 바꾼다)
+function setDevDockIcon() {
+  if (process.platform !== 'darwin' || app.isPackaged || !app.dock) return;
+  const icon = path.join(__dirname, '..', 'build', 'icon.png');
+  if (fs.existsSync(icon)) app.dock.setIcon(icon);
+}
+
 app.whenReady().then(() => {
+  setDevDockIcon();
   buildMenu();
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

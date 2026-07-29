@@ -23,6 +23,18 @@ right-click the app and choose **Open**, or clear the quarantine flag:
 xattr -cr /Applications/schema-lens.app
 ```
 
+**Try it with npx (any platform)** — requires Node.js 20+:
+
+```bash
+npx schema-lens                       # opens the file picker
+npx schema-lens path/to/schema.dbml   # or open a schema right away
+```
+
+This pulls in Electron (~130 MB) on first run. It is the quickest way to try
+schema-lens, but the downloaded app is not branded — macOS shows *Electron* in the
+menu bar because the app runs inside Electron's own bundle. For everyday use, prefer
+the DMG above.
+
 **Run from source (any platform)** — requires Node.js:
 
 ```bash
@@ -128,6 +140,14 @@ plus inline regression fixtures. `npm run test:contrast` re-verifies palette con
 
 `npm run dist` builds the macOS DMG/ZIP into `dist/` (electron-builder). Releases are
 published automatically by CI when a `v*` tag is pushed.
+
+`npm run npm:build` assembles the npm package into `dist-npm/`; `npm run npm:publish`
+builds and publishes it. The npm package is staged in a separate directory rather than
+published from the repo root for two reasons: electron-builder refuses to build when
+`electron` is a production dependency, while the npm package needs exactly that; and
+without an `.npmignore`, npm falls back to `.gitignore` and drops build output the app
+needs (`renderer/bundle.js`) while shipping screenshots it does not. The file list lives
+at the top of `scripts/build-npm.mjs`.
 
 ## DBML conventions (optional)
 
