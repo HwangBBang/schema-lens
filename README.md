@@ -1,224 +1,135 @@
+<div align="center">
+
+<img src="build/icon.png" width="120" alt="schema-lens icon">
+
 # schema-lens
 
-A desktop ERD explorer for [DBML](https://dbml.dbdiagram.io/) schemas, built with Electron.
+A macOS desktop ERD explorer that keeps [DBML](https://dbml.dbdiagram.io/) schemas readable past 20 tables.
 
-schema-lens renders your whole schema as one readable diagram — relationships are
-classified by meaning, person-reference edges fold away instead of turning the graph
-into spaghetti, and a dedicated focus mode lets you walk the schema one table at a time.
+See the whole schema as one diagram, walk it one table at a time,
+and compare it with your last commit.
+
+</div>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/erd-dark.png">
   <img alt="Full ERD view: clustered table groups, semantic edge colors, hub folding, minimap" src="docs/erd-light.png">
 </picture>
 
-## Install
+## What it does
 
-**Download (macOS)** — grab the latest DMG from
-[Releases](https://github.com/HwangBBang/schema-lens/releases) (universal binary).
-
-The app is not code-signed, so the first launch triggers macOS Gatekeeper — either
-right-click the app and choose **Open**, or clear the quarantine flag:
-
-```bash
-xattr -cr /Applications/schema-lens.app
-```
-
-**Try it with npx (any platform)** — requires Node.js 20+:
-
-```bash
-npx schema-lens                       # opens the file picker
-npx schema-lens path/to/schema.dbml   # or open a schema right away
-```
-
-This pulls in Electron (~130 MB) on first run. It is the quickest way to try
-schema-lens, but the downloaded app is not branded — macOS shows *Electron* in the
-menu bar because the app runs inside Electron's own bundle. For everyday use, prefer
-the DMG above.
-
-**Run from source (any platform)** — requires Node.js:
-
-```bash
-git clone https://github.com/HwangBBang/schema-lens.git
-cd schema-lens
-npm install
-npm start                       # restores the last opened file
-npm start assets/example.dbml   # or open the bundled example right away
-```
-
-More dev commands (tests, packaging) are under [Getting started](#getting-started).
-
-## Why
-
-Auto-generated ERDs stop being useful at around 20 tables: every table references
-`users`, every edge crosses every other edge, and the actual structure drowns.
-schema-lens addresses this in three ways:
-
-- **Semantic edge classification** — every foreign key is typed as one of eight
-  relationship kinds (composition, ownership, request, authorship, sharing, mention,
-  hierarchy, reference), inferred from column-name patterns, `ON DELETE` rules, and
-  PK membership. Edges stay neutral gray until you hover or select — then the
-  relationship's color and a one-sentence explanation appear, so the diagram reads
-  calmly at rest but explains itself on demand.
-- **Hub folding** — when most inbound edges of a high-degree table are
-  person-references (the `users` table in almost every schema), those edges are
-  hidden by default and summarized as compact chips on each card. What remains
-  visible is the structural skeleton. Folded hubs can be toggled back per hub.
-- **Obstacle-aware edge routing** — every edge is routed on a grid through the
-  corridors between tables (rounded orthogonal paths), never through them, and a
-  minimap keeps you oriented.
-
-## Features
-
-**Full ERD view**
-- Four arrangement modes on a floating bar at the bottom of the map: **group clusters**
-  (elkjs compound layout per `TableGroup`), **left→right flow**, **top→down flow**
-  (reference-direction layers), and **grid**. The chosen mode persists per file.
-- Table cards use solid group-color headers (dbdiagram-style); group hulls appear in
-  group mode, and every group is a collapsible section in the sidebar
-- Solid lines for enforced FK constraints, dashed for logical (application-level) FKs
-- Cardinality (`1:1` / `N:1` / `N:M`) shown on edge hover and in tooltips; junction tables detected and badged `N:M`
-- Legend and per-hub edge toggles live in a popover behind the toolbar ⓘ button
-- Click = 1-hop highlight · double-click = focus mode · `0` = fit to screen · `Esc` = deselect · `/` = search
-- Wheel = pan, `⌘`/`Ctrl` + wheel = zoom · drag tables, or drag a group hull to move the whole cluster
-- Layout edits persist per file (`View > Reset Layout` to discard)
-- Minimap with viewport indicator — click or drag it to jump
-- Hovering a column row or a folded-hub chip opens a detail tooltip after a short delay —
-  full column name and type, nullability, default, note, enum values, composite unique
-  membership, and the relationship behind an FK column
-
-**Focus mode**
-- Three-column view of a single table: referencing tables on the left (the N side),
-  the focused table in the middle, referenced parents on the right (the 1 side)
-- One wire per relationship, anchored to the actual FK column row; hovering a wire,
-  column row, or neighbor card cross-highlights the other two
-- The keys-only / all-columns toggle applies here too
-- Click any neighbor to refocus; junction tables get a one-click shortcut to the far
-  side; navigation history with a breadcrumb in the toolbar
+| Feature | What it does |
+|---|---|
+| Full ERD view | Draws every table in one diagram. Tables can be arranged by `TableGroup` cluster, left-to-right flow, top-down flow, or grid, and a minimap shows where you are. |
+| Focus mode | Puts one table in the middle, the tables that reference it on the left, and the tables it references on the right. Click a neighbor to move the focus to it. |
+| Delete impact | In focus mode, shows what deleting a row of the focused table does: which tables cascade, which columns become `NULL`, and which references block the delete. |
+| Compare with last commit | Places the committed schema and your working copy side by side when the file is in a git repository. Added parts are green, removed parts red, and changed parts amber. Open it with `변경 비교` (Compare changes) in the toolbar. |
+| Schema library | Keeps a list of every file you have opened, with its table and relationship counts. The list is the start screen, and `⌘L` opens it at any time. |
+| Extract DBML from SQL | Converts PostgreSQL or MySQL DDL, such as `pg_dump --schema-only` output, to DBML. It needs no database connection. |
+| Live reload | Re-renders the diagram when the open `.dbml` file changes on disk. |
+| Screenshot CLI | Renders a schema to a PNG and exits, for visual regression checks. |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/focus-dark.png">
   <img alt="Focus mode: three-column navigation around a single table" src="docs/focus-light.png">
 </picture>
 
-**Schema library & SQL import**
-- The start screen is a schema library: every file you open is registered as a card
-  (name, path, table/ref counts, last opened) — click to reopen, remove without
-  deleting the file. Reachable anytime via `⌘L` or the sidebar header dropdown.
-- **Extract DBML from SQL** (`⌘⇧E`): paste DDL or open a `.sql` file
-  (e.g. `pg_dump --schema-only` output), pick the dialect (PostgreSQL / MySQL),
-  preview the converted DBML, then save & open it in one step. Conversion runs on
-  the bundled `@dbml/core` importer — no database connection required.
+## Why it stays readable
 
-**Compare against the last commit**
-- If the open `.dbml` lives in a git repository, **변경 비교** puts the committed schema and
-  your working copy side by side. Both panes share one layout, so the same table sits at the
-  same spot on both sides, and zoom/pan move together.
-- Added tables and columns are green, removed ones red, changed ones amber — and the same
-  rule applies to relationship lines. A column that changed is pulled out of the "keys only"
-  fold so the edit is never hidden.
-- Table color reflects the table's own definition (columns, PK, unique, group, note).
-  A relationship change colors the line, not the tables it connects.
-- Outside a repository, or before the file's first commit, the view explains why instead of
-  showing an empty canvas.
+Auto-generated ERDs stop being useful at around 20 tables. Every table references `users`,
+every edge crosses every other edge, and the real structure is hard to see. schema-lens
+handles this in three ways.
 
-**Editing workflow**
-- Open via `⌘`/`Ctrl`+`O`, drag & drop, or CLI argument; the last file is restored on launch
-- The open file is watched — edits re-parse and re-render automatically
-  (survives editors that replace the file on save)
-- Light and dark themes; the full palette — including card headers and canvas
-  surfaces — is contrast-checked (WCAG AA) in both
-- On macOS the window is frameless: traffic lights sit on the sidebar and the top
-  strip drags the window
+- Semantic edge classification. Each foreign key is typed as one of eight relationship kinds
+  (composition, ownership, request, authorship, sharing, mention, hierarchy, reference).
+  schema-lens infers the kind from column names, `ON DELETE` rules, and primary-key membership.
+  Edges stay gray until you hover or select one, and then the edge shows its color and a
+  one-sentence explanation.
+- Hub folding. schema-lens treats a table as a hub when many tables reference it and most of
+  those references are ownership, request, authorship, sharing, or mention relationships, as
+  with `users` referenced through `created_by` and `assignee_id`. It hides the hub's incoming
+  edges and shows a small chip on each referencing table instead. To show a hub's edges again,
+  open the legend with the circled "i" button in the toolbar.
+- Routing around tables. Edges run through the gaps between tables and never cross a table.
 
-## Getting started
+## Requirements
+
+- macOS 12 or later, on Apple Silicon or Intel (the release is a universal build)
+- Node.js 22 to build from source (the version CI uses)
+- The UI text is in Korean.
+
+## Install
+
+Download the DMG from the [latest release](https://github.com/HwangBBang/schema-lens/releases/latest)
+and drag `schema-lens.app` to Applications.
+
+The app is not signed with an Apple Developer ID, so macOS blocks the first launch of a copy
+downloaded with a browser. Remove the quarantine flag once, and the app opens normally after that:
 
 ```bash
+xattr -dr com.apple.quarantine /Applications/schema-lens.app
+```
+
+The [install guide (Korean)](docs/INSTALL.md) has a one-line terminal install that avoids
+this block, plus update, uninstall, and troubleshooting steps.
+
+## Shortcuts
+
+| Where | Input and action |
+|---|---|
+| Anywhere | `⌘O` open a file, `⌘L` schema library, `⌘⇧E` extract DBML from SQL, `⌘R` reload the file |
+| Full ERD view, keyboard | `/` search, `0` fit to screen, `Esc` clear the selection |
+| Full ERD view, mouse | Click a table to highlight its direct neighbors, double-click to open focus mode, wheel to pan, `⌘` + wheel to zoom, drag a table or a group outline to move it |
+| Focus mode | `↑` `↓` move up and down within one side (neighbor tables on the left and right, the focused table's columns in the middle), `Space` preview a neighbor's own relationships, `D` turn delete impact on or off, `⌫` go back, `Esc` close the preview or return to the full ERD |
+| Compare view | `0` fit to screen, `Esc` return to the full ERD |
+
+Layout edits are saved per file, and `View > Reset Layout` (`⌘⇧R`) discards them.
+
+## Build from source
+
+```bash
+git clone https://github.com/HwangBBang/schema-lens.git
+cd schema-lens
 npm install
 npm start                       # restores the last opened file
-npm start assets/example.dbml   # bundled example: a fictional code-collaboration platform
+npm start assets/example.dbml   # opens the bundled example schema
 ```
 
-`npm test` runs the parser/semantics test suite against the bundled example schema
-plus inline regression fixtures. `npm run test:contrast` re-verifies palette contrast.
+`assets/example.dbml` describes a fictional code-collaboration platform.
 
-`npm run dist` builds the macOS DMG/ZIP into `dist/` (electron-builder). Releases are
-published automatically by CI when a `v*` tag is pushed.
-
-`npm run npm:build` assembles the npm package into `dist-npm/`; `npm run npm:publish`
-builds and publishes it. The npm package is staged in a separate directory rather than
-published from the repo root for two reasons: electron-builder refuses to build when
-`electron` is a production dependency, while the npm package needs exactly that; and
-without an `.npmignore`, npm falls back to `.gitignore` and drops build output the app
-needs (`renderer/bundle.js`) while shipping screenshots it does not. The file list lives
-at the top of `scripts/build-npm.mjs`.
-
-## DBML conventions (optional)
-
-Standard DBML works out of the box. A few conventions make the diagram more precise:
-
-- **Logical FKs** — a trailing `// logical` comment on the line that declares a `Ref`
-  marks it as an application-enforced relationship with no database constraint; it
-  renders dashed. Works with inline refs (`[ref: > users.id] // logical`), composite
-  refs (`a.(x, y) > b.(x, y)`), table aliases, quoted identifiers, and `public.`
-  prefixes. Commented-out refs, block comments, and ref-shaped text inside `note`
-  strings are ignored.
-- **Edge labels** — a short leading phrase in a column note
-  (e.g. `note: 'assignee → users.id'`) is extracted as the relationship label shown
-  in tooltips and focus mode. Version/constraint meta tokens are stripped automatically.
-- **Clustering** — `TableGroup` drives ERD clusters, group colors, and the sidebar.
-
-## Screenshot CLI
-
-Renders, captures, and exits without interaction — useful for visual regression checks:
+## Running tests
 
 ```bash
-npx electron . <file> --screenshot out.png [--focus TABLE] [--theme light|dark] \
-  [--side open|closed] [--layout group|lr|tb|grid] [--impact] [--peek TABLE] \
-  [--tip TABLE.COLUMN] [--tip-hub TABLE:HUB]
+npm run typecheck       # TypeScript type check
+npm test                # parser and semantics tests on the example schema and regression fixtures
+npm run test:contrast   # WCAG AA contrast check of the light and dark palettes
 ```
 
-On parse failure it captures the error screen and exits with code 2. `--focus`,
-`--theme`, and `--side` apply to that run only; `--layout` behaves like clicking the
-arrangement bar, so the chosen mode is saved for that file.
+Building the DMG, the npm package layout, and the Screenshot CLI options are described in
+[docs/development.md](docs/development.md).
 
-Focus-mode extras — both require an explicit `--focus TABLE` (the process exits with
-code 1 otherwise):
+## Writing DBML for schema-lens
 
-- `--impact` opens the delete-impact view (action sections + cascade chains).
-- `--peek TABLE` expands the 2-hop preview panel of that neighbor card. If the target
-  is hidden behind a collapsed "+N more" fold it is auto-expanded; if it is not a
-  neighbor of the focused table at all, the run exits with code 2.
-
-`--diff` opens the compare view (last commit vs working copy). It needs no `--focus`. If the
-baseline cannot be read (not a repository, file never committed) the run exits with code 2 —
-the same fail-fast rule as `--peek`, so a broken path never passes silently.
-
-`--tip TABLE.COLUMN` and `--tip-hub TABLE:HUB` capture with a hover tooltip forced open
-(hover state can't be reproduced any other way). The two flags are mutually exclusive, and
-both only work in the full ERD view. Table names can contain dots, so `--tip` splits table
-and column at the **last** dot. If the target column is folded away under "키만" mode the
-run exits with code 2, so pass `--cols all` alongside it.
-
-`--cols keys|all` overrides the column-display toggle for that run, in either view.
-
-```bash
-npx electron . assets/example.dbml --screenshot impact.png --focus repos --impact
-npx electron . assets/example.dbml --screenshot peek.png --focus issues --peek comments
-npx electron . path/to/schema.dbml --screenshot diff.png --diff
-```
+Standard DBML works as is. Three optional conventions make the diagram more precise:
+a `// logical` comment marks an application-enforced foreign key and draws it dashed,
+a short phrase at the start of a column note becomes the edge label, and `TableGroup`
+sets the clusters and colors. See [docs/dbml-conventions.md](docs/dbml-conventions.md).
 
 ## Architecture
 
 | Path | Role |
 | --- | --- |
-| `src/parse.js` | `@dbml/core` parsing plus a raw-text prepass that collects `// logical` markers (the parser itself discards comments). Emits a plain JSON model. |
-| `src/semantics.js` | Dependency-free UMD module: relationship typing, cardinality, junction and hub heuristics. Shared by the Node test suite and the renderer. |
-| `renderer/erd.js` | elkjs layout, SVG rendering, viewport, obstacle-aware edge routing, minimap. |
-| `renderer/focus.js` | Three-column focus navigation. |
-| `renderer/app.js` | App state, shell, theming. |
-| `renderer/style.css` | Design tokens (single source of truth for both themes). |
+| `main.ts` | Electron main process: window, menus, file watching, SQL import, reading the last commit |
+| `src/parse.ts` | Parses DBML with `@dbml/core` and collects `// logical` markers from the raw text, because the parser drops comments |
+| `src/semantics.ts` | Relationship kinds, cardinality, junction tables, hubs, and delete impact. Pure functions shared by the renderer and the tests |
+| `src/diff.ts` | Compares two parsed schemas and reports added, removed, and changed tables, columns, and relationships |
+| `src/git-baseline.ts` | Reads the last committed version of the open file with `git` |
+| `renderer/erd.ts` | Full ERD view: elkjs layout, SVG rendering, edge routing, minimap |
+| `renderer/focus.ts` | Focus mode and the delete impact view |
+| `renderer/compare.ts` | Side-by-side compare view |
+| `renderer/app.ts` | App shell: state, sidebar, toolbar, view switching |
+| `renderer/style.css` | Design tokens for both themes |
 
-## Notes
+## License
 
-- UI copy is currently in Korean.
-- Licensed under the [MIT License](LICENSE).
+[MIT](LICENSE) © 2026 HwangBBang
